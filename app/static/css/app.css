@@ -331,3 +331,8 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
 /* panel titles are uppercase; math inside them must keep its case (α, β, G(k, m)) */
 .panel-title .math, .panel-title .small, .panel-title .legend { text-transform: none; letter-spacing: 0; }
 .seg button { white-space: nowrap; }
+.live-box { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--clean); opacity: .5; }
+#btn-live.on { border-color: var(--clean); color: var(--clean); background: color-mix(in srgb, var(--clean) 10%, transparent); }
+#btn-live.on .live-dot { opacity: 1; animation: pulse 1s ease-in-out infinite; }
+.plot[data-empty]:empty::before { content: attr(data-empty); }

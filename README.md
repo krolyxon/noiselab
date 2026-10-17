@@ -25,7 +25,7 @@ No black-box denoisers are used (`noisereduce`, RNNoise, DeepFilterNet, Demucs, 
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 flask --app app run --debug                          # open http://127.0.0.1:5000
-pytest -q                                            # 129 tests, ~4 s
+pytest -q                                            # ~140 tests, ~5 s
 ```
 
 Requires Python 3.10+ (developed on 3.14). Dependencies: Flask, NumPy, SciPy, soundfile, pytest, plus matplotlib, which only the comparison script uses. Plotly.js 2.35.2, KaTeX 0.16.11 and the Inter / JetBrains Mono fonts are vendored in `app/static/vendor/` with their licences. The app works offline and on lab networks that block CDNs.
@@ -56,8 +56,10 @@ Layout, desktop (≥ 1280 px): **left** = source, demo mode, parameters; **centr
 4. **Tune.** Every slider reprocesses after 250 ms, reusing the cached STFT (about 50 ms for a 30 s clip). **Match Simulink basic** sets the exact Simulink parameters. Other presets: Faithful (light), Balanced, Aggressive, Mains hum 50 Hz, Fan/AC. Options marked *extended* (smoothing, Wiener gain, min-statistics) are not in the basic Simulink model.
 5. **Listen.** The A/B player switches Original / Cleaned / Removed (/ Clean ref) on one shared playhead (`Space` play, `A` switch).
 6. **Inspect.** Plots: waveform; noisy/cleaned/removed spectrograms on one colour scale; frame energy with VAD shading; gain mask G(k, m); noise estimate with mean spectra. **Click any time plot** to open the **STFT frame inspector**, which shows that frame's |Y|, the subtracted level α|N̂|, the floor and the result |S̃|. `,` and `.` step frames. Drag to zoom (all time plots stay in sync); double-click to reset.
-7. **Export.** The ZIP contains the noisy, cleaned and removed-noise WAVs (and the clean reference in demo mode), `params.json`, `metrics.json` and every plot as a titled PNG.
-8. **Method.** The header **Method** dialog gives the equations (KaTeX), what α and β do, limitations and references. `?` lists all shortcuts.
+7. **Live denoise (preview).** Hear the basic algorithm in real time on your microphone, through an AudioWorklet with ≈ N samples of algorithmic latency (10.7 ms at N = 512, 48 kHz). The Denoised/Bypass toggle gives a direct A/B. α, β and p apply instantly. **Use headphones.** The noise estimate comes from your recorded profile, or is learned from the first T s (stay quiet). The live path implements only the basic algorithm (Hann, 50 %, subtraction rule); its JS core is parity-tested against Python (< 10⁻⁹).
+8. **Parameter sweep (demo mode).** A heatmap of ground-truth ΔSI-SDR or ΔSNR over 11 α × 7 β values, with every other parameter as currently set. ★ marks the best cell and an outline marks the current one. Click a cell to apply it.
+9. **Export.** The ZIP contains the noisy, cleaned and removed-noise WAVs (and the clean reference in demo mode), `params.json`, `metrics.json` and every plot as a titled PNG.
+10. **Method.** The header **Method** dialog gives the equations (KaTeX), what α and β do, limitations and references. `?` lists all shortcuts.
 
 **Honest metrics.** SNR, SI-SDR and segmental SNR need the clean signal, so for uploads and recordings they show **"n/a (no clean reference)"**. They are never estimated. Reference-free indicators are shown instead: noise reduction over VAD-detected noise frames, and a rough VAD-based SNR estimate.
 
@@ -105,6 +107,8 @@ How to read this:
 | POST | `/api/noise-profile` | multipart `audio` (noise only) → `profile_id` for `noise_mode=profile` |
 | POST | `/api/demo` | `{noise_type, snr_db, duration, seed, params}` (or multipart with a `clean` file) → as process + ground truth |
 | GET | `/api/frame/<job_id>?t=` | STFT frame inspector data |
+| POST | `/api/sweep/<job_id>` | α × β grid of ground-truth improvements (demo jobs only) |
+| GET | `/api/noise-profile/<id>/spectrum?sr=&n_fft=` | Profile \|N̂\| for the live preview |
 | GET | `/api/audio/<job_id>/<original\|cleaned\|noise\|clean>.wav` | `noise` = removed component y − ŝ; `clean` = demo only |
 | GET/POST | `/api/export/<job_id>` | ZIP (POST adds plot PNGs) |
 
@@ -134,9 +138,10 @@ samples/                 no audio committed; see samples/README.md
 
 ## Development notes
 
-- `pytest -q` runs everything. `tests/test_js_helpers.py` runs the browser WAV encoder and decoders under Node, and is skipped if Node isn't installed.
+- `pytest -q` runs everything. `tests/test_js_helpers.py` (browser WAV encoder/decoders) and `tests/test_js_parity.py` (live-preview DSP core vs Python) run under Node, and are skipped if Node isn't installed.
 - DSP functions are pure and typed, and their comments cite equation numbers in `docs/ALGORITHM.md`.
-- The UI was checked in headless Chrome at 1366×768, 1920×1080 and 390 px wide (upload, demo, sliders, player, recording with a fake microphone, export, themes). Real microphone input and audible playback were not testable headlessly.
+- The UI was checked in headless Chrome at 1366×768, 1920×1080 and 390 px wide (upload, demo, sliders, player, recording and live preview with a fake microphone, sweep, export, themes). The AudioWorklet was also rendered offline and compared with Python (93.8 dB SNR between outputs). Real microphone input and audible playback were not testable headlessly.
+- Minimum statistics (`minstats`) is bias-compensated (Eq. 6). A raw 10th percentile underestimates the noise by 8.7 dB, and correcting it raised the mean demo SI-SDR gain from +1.5 to +4.0 dB.
 
 ## References
 

@@ -164,3 +164,17 @@ If the mixture's peak exceeds 0.9, clean, noise and mixture are all scaled by th
 3. **Precision.** If the model runs in single precision, expect differences around 10⁻⁷ relative. In double precision they should be negligible.
 4. **Noise-estimate frames.** Both average the complete frames starting at 0, H, 2H, … inside the first T s (Eq. 4). Any difference here changes |N̂| and is visible everywhere. Check it first if the outputs disagree.
 5. **Exponent.** The basic Simulink chain does magnitude subtraction (p = 1). The "Match Simulink basic" preset therefore uses `exponent = 1`, while the Python default is p = 2 (power subtraction).
+
+---
+
+## 11. Live preview (AudioWorklet, stretch goal)
+
+`app/static/js/dsp/ss_core.js` runs the **basic** algorithm hop by hop in the browser: periodic Hann, 50 % overlap, Eq. (7) with p = 1 or 2, noisy phase, overlap-add with a one-frame delay. It is the same block chain as the Simulink model. `live-worklet.js` wraps it in an AudioWorklet: 128-sample render quanta are collected into hops of H = N/2, and the output FIFO is primed with H zeros.
+
+- **Latency:** H (FIFO priming) + H (overlap-add) = N samples, i.e. 10.7 ms for N = 512 at 48 kHz, plus the audio device's own I/O latency.
+- **Noise estimate:** either the recorded noise profile (Eq. 4, computed by the server at the AudioContext's sample rate), or learned from the first T seconds of the live input. Learning uses the same frames as Eq. (4). Until it finishes, the output is a pass-through, because the Hann windows sum to 1.
+- **Not implemented live:** the Wiener rule, smoothing, `region` / `minstats` modes, and 75 % overlap.
+
+Verification:
+- `tests/test_js_parity.py` runs `ss_core.js` under Node. It matches the Python pipeline to < 10⁻⁹ for N = 256, 512, 1024 and p = 1, 2, after the one-hop latency, including the live-learning path.
+- A headless-Chrome check rendered a demo clip through the real `live-worklet.js` in an `OfflineAudioContext`. It matched Python at **93.8 dB SNR between outputs** (max difference 9.6 × 10⁻⁶, float32 audio buffers), with a measured latency of exactly N samples.

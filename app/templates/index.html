@@ -84,6 +84,19 @@
             <button class="btn btn-ghost btn-sm" id="btn-profile-clear" type="button">Clear</button>
           </div>
           <p class="hint warn" id="mic-unsupported" hidden></p>
+
+          <div class="live-box">
+            <div class="rec-head">
+              <button class="btn" id="btn-live" type="button" title="Real-time denoising of the microphone (AudioWorklet)">
+                <span class="live-dot"></span><span id="btn-live-label">Live denoise</span></button>
+              <div class="seg seg-sm" id="live-ab" role="radiogroup" aria-label="Live output">
+                <button type="button" role="radio" data-live="on" aria-checked="true" disabled>Denoised</button>
+                <button type="button" role="radio" data-live="bypass" aria-checked="false" disabled>Bypass</button>
+              </div>
+            </div>
+            <p class="hint" id="live-status">Real-time preview of the basic algorithm (Hann, 50 %, subtraction rule).
+              <strong>Use headphones</strong>: speakers feed back into the microphone.</p>
+          </div>
         </div>
       </section>
 
@@ -230,7 +243,7 @@
             <button class="btn btn-sm btn-accent" id="btn-sweep" type="button">Run sweep</button>
           </div>
         </div>
-        <div class="plot plot-sweep" id="plot-sweep"></div>
+        <div class="plot plot-sweep" id="plot-sweep" data-empty="Press “Run sweep” to compute the α × β grid for this demo."></div>
         <p class="hint" id="sweep-info">Runs 77 combinations of α and β with all other parameters as currently set, and scores each against the clean reference.</p>
       </section>
     </section>

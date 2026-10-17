@@ -5,6 +5,7 @@ import { Controls } from "./controls.js";
 import { renderMetrics } from "./metrics.js";
 import { ABPlayer } from "./player.js";
 import { colors, drawInspector, drawSpectra, drawSweep, Plots } from "./plots.js";
+import { LivePreview, liveSupport } from "./live.js";
 import { drawLive, micSupport, Recorder } from "./recorder.js";
 import { $, $$, api, debounce, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
@@ -498,6 +499,7 @@ function setRecUI(on, mode = null) {
 
 async function toggleRecord() {
   if (recorder.state === "recording") { recorder.stop().catch(() => {}); return; }
+  if (live.running) { toast("Stop the live preview before recording.", "error"); return; }
   if (recorder.state === "idle") await beginRecording("clip");
 }
 
@@ -552,6 +554,85 @@ function setProfile(p) {
   $("#profile-info").textContent = p ? `Profile: ${fmt(p.duration, 2, "s")} @ ${p.sr} Hz` : "";
 }
 
+// ---------------------------------------------------------------------------- live preview (stretch)
+const live = new LivePreview({
+  onStatus: (st) => liveUI.status(st),
+  onLevel: drawLevel,
+});
+
+const liveUI = {
+  startedWith: null,
+
+  setUI(on) {
+    $("#btn-live").classList.toggle("on", on);
+    $("#btn-live-label").textContent = on ? "Stop live" : "Live denoise";
+    for (const b of $$("#live-ab button")) b.disabled = !on;
+    const noMic = !!micSupport();
+    $("#btn-rec").disabled = on || noMic;
+    $("#btn-profile").disabled = on || noMic;
+    $("#rec").classList.toggle("recording", on);
+    if (!on) setRecUI(false);
+  },
+
+  async toggle() {
+    if (live.running) {
+      live.stop();
+      this.setUI(false);
+      $("#live-status").textContent = "Live preview stopped.";
+      return;
+    }
+    const unsupported = liveSupport();
+    if (unsupported) { toast(unsupported, "error"); return; }
+    if (recorder.state !== "idle") { toast("Finish the recording first.", "error"); return; }
+    const v = controls.get();
+    const useProfile = v.noise_mode === "profile" && controls.profileId;
+    player.pause();
+    try {
+      await live.start({
+        N: v.n_fft, alpha: v.alpha, beta: v.beta, exponent: v.exponent, noiseSeconds: v.noise_seconds,
+        getNoiseMag: useProfile ? async (sr, N) => (await api(
+          `/api/noise-profile/${controls.profileId}/spectrum?sr=${sr}&n_fft=${N}`)).noise_mag : null,
+      });
+    } catch (e) {
+      toast(`Live preview: ${e.message}`, "error");
+      return;
+    }
+    this.startedWith = { n_fft: v.n_fft };
+    this.setUI(true);
+    this.setBypass(false);
+    const caveats = [];
+    if (v.overlap !== 0.5) caveats.push("50 % overlap");
+    if (v.method !== "spectral_subtraction") caveats.push("subtraction rule (not Wiener)");
+    if (v.gain_smooth > 0 || v.freq_smooth_bins > 1) caveats.push("no smoothing");
+    if (!["initial", "profile"].includes(v.noise_mode) || (v.noise_mode === "profile" && !useProfile)) {
+      caveats.push(`noise learned from the first ${v.noise_seconds.toFixed(2)} s`);
+    }
+    this.caveat = caveats.length ? ` Live uses: ${caveats.join(", ")}.` : "";
+    this.source = useProfile ? "noise profile" : `first ${v.noise_seconds.toFixed(2)} s`;
+  },
+
+  status({ learning, progress, bypass }) {
+    if (!live.running) return;                 // a message can arrive just after Stop
+    $("#live-status").textContent = learning
+      ? `Learning noise: stay quiet… ${Math.round(progress * 100)} %`
+      : `${bypass ? "Bypass (dry, same latency)" : "Denoising"} · noise from ${this.source} · ` +
+        `N = ${this.startedWith.n_fft}, latency ≈ ${fmt((this.startedWith.n_fft / live.ctx?.sampleRate || 0) * 1000, 1, "ms")} + audio I/O.${this.caveat}`;
+  },
+
+  setBypass(on) {
+    live.setBypass(on);
+    for (const b of $$("#live-ab button")) b.setAttribute("aria-checked", String((b.dataset.live === "bypass") === on));
+  },
+
+  onParams(v) {
+    if (!live.running) return;
+    live.setParams({ alpha: v.alpha, beta: v.beta, exponent: v.exponent });
+    if (v.n_fft !== this.startedWith.n_fft) toast("Frame length changes apply when the live preview is restarted.");
+  },
+};
+$("#btn-live").addEventListener("click", () => liveUI.toggle());
+for (const b of $$("#live-ab button")) b.addEventListener("click", () => liveUI.setBypass(b.dataset.live === "bypass"));
+
 // ---------------------------------------------------------------------------- boot
 let controls;
 
@@ -570,7 +651,7 @@ async function boot() {
     controls = new Controls({
       container: $("#param-groups"), presetSelect: $("#preset"), presetDesc: $("#preset-desc"),
       schema: presets.schema, presets: presets.presets,
-      onChange: () => { updateRegionOverlay(); reprocess(); },
+      onChange: (v) => { updateRegionOverlay(); reprocess(); liveUI.onParams(v); },
     });
   } catch (e) {
     $("#param-groups").textContent = "";

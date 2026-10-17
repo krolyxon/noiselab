@@ -109,3 +109,9 @@ During development, gain smoothing *lowered* SNR to −4 dB with a Hamming windo
 
 **31. Why build a web app at all if Simulink is the deliverable?**
 It's an extension for exploring the algorithm: change α or β and hear and see the effect immediately, inspect individual STFT frames, record live, and compare quantitatively with ground truth. It implements the same steps, so insights carry over to the model.
+
+**32. Can it run in real time? What is the latency?**
+Yes. The live preview runs the basic algorithm in an AudioWorklet, one 512-point FFT per 256-sample hop. The algorithmic latency is N samples: one hop to fill the buffer plus one hop of overlap-add delay, i.e. 10.7 ms at 48 kHz, plus the sound card's I/O latency. Longer frames add latency, so N = 2048 gives 43 ms.
+
+**33. Why is the plain percentile ("minimum statistics") estimate biased, and how did you fix it?**
+In noise-only bins |Y|² is roughly exponentially distributed, so its q-quantile is −ln(1−q)·σ², only about 0.105·σ² for q = 10 %, an 8.7 dB underestimate. Dividing by −ln(1−q), and scaling by π/4 to get a mean magnitude, removes the bias (Eq. 6). On the demo set this raised the SI-SDR gain from +1.5 dB to +4.0 dB.

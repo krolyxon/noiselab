@@ -6,7 +6,7 @@ import { decodeAudio, downmix } from "./wav.js";
 
 // Ask the browser NOT to process the signal: its own noise suppression would denoise
 // the recording before our algorithm sees it, and AGC would pump the noise floor.
-const CONSTRAINTS = {
+export const CONSTRAINTS = {
   audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
 };
 

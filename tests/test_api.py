@@ -270,3 +270,16 @@ def test_sweep_demo_only(client, demo_wav):
     # uploads have no clean reference
     jid = _upload(client, demo_wav).get_json()["job_id"]
     assert client.post(f"/api/sweep/{jid}", json={}).status_code == 422
+
+
+def test_noise_profile_spectrum_for_live_preview(client):
+    noise = synth.make_noise("pink", 48000 * 2, 48000, seed=1) * 0.05
+    pid = client.post("/api/noise-profile", data={"audio": (io.BytesIO(wav_bytes(noise, sr=48000)), "n.wav")},
+                      content_type="multipart/form-data").get_json()["profile_id"]
+    j = client.get(f"/api/noise-profile/{pid}/spectrum?sr=48000&n_fft=1024").get_json()
+    assert len(j["noise_mag"]) == 513 and all(v >= 0 for v in j["noise_mag"])
+    j44 = client.get(f"/api/noise-profile/{pid}/spectrum?sr=44100&n_fft=512").get_json()   # resampled
+    assert len(j44["noise_mag"]) == 257
+    assert client.get(f"/api/noise-profile/{pid}/spectrum?sr=48000&n_fft=500").status_code == 400
+    assert client.get(f"/api/noise-profile/{pid}/spectrum?n_fft=512").status_code == 400
+    assert client.get(f"/api/noise-profile/{'c' * 32}/spectrum?sr=48000").status_code == 404

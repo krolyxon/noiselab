@@ -20,7 +20,9 @@ from werkzeug.utils import secure_filename
 
 from . import __version__
 from .dsp import synth
-from .params import PRESETS, ParamError, schema_json, validate
+from .dsp.noise_estimation import estimate_profile
+from .dsp.stft import StftConfig
+from .params import PRESETS, SCHEMA, ParamError, schema_json, validate
 from .services import processing
 from .services.audio_io import AudioError, load_audio, supported_formats
 from .services.jobs import Job, JobStore, ProfileStore, valid_id
@@ -186,6 +188,29 @@ def noise_profile():
     y, sr, _ = _read_upload("audio", current_app.config["MAX_PROFILE_DURATION_S"])
     prof = _profiles().create(y, sr)
     return jsonify(profile_id=prof.id, sr=sr, duration=round(len(y) / sr, 3))
+
+
+@bp.get("/api/noise-profile/<profile_id>/spectrum")
+def noise_profile_spectrum(profile_id: str):
+    """|N̂| of a recorded profile (Eq. 4) for the live preview: Hann, 50 %, given n_fft, at the
+    AudioContext's sample rate (the clip is resampled if needed)."""
+    prof = _profiles().get(profile_id) if valid_id(profile_id) else None
+    if prof is None:
+        raise APIError("noise profile not found or expired; record it again", 404)
+    n_fft = request.args.get("n_fft", default=512, type=int)
+    sr = request.args.get("sr", type=int)
+    if n_fft not in SCHEMA["n_fft"].choices:
+        raise APIError(f"n_fft must be one of {list(SCHEMA['n_fft'].choices)}")
+    if sr is None or not 8000 <= sr <= 192000:
+        raise APIError("sr (8000–192000 Hz) is required")
+    clip = prof.y
+    if prof.sr != sr:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(prof.sr, sr)
+        clip = resample_poly(clip, sr // g, prof.sr // g)
+    mag = estimate_profile(clip, StftConfig(n_fft, 0.5, "hann"))
+    return jsonify(profile_id=prof.id, sr=sr, n_fft=n_fft, noise_mag=mag.tolist())
 
 
 @bp.post("/api/demo")
