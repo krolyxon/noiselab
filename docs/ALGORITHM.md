@@ -135,9 +135,9 @@ $$\mathrm{NR} = \frac{1}{|\mathcal N|}\sum_{m\in\mathcal N}\big(E_y(m) - E_{\hat
 
 **Energy VAD**: frame m counts as speech if
 
-$$E(m) > \operatorname{P}_{20}\{E\} + 6\ \text{dB} \tag{20}$$
+$$E(m) > \operatorname{P}_{20}\{E\} + 3\ \text{dB} \tag{20}$$
 
-with a 3-frame hangover after each active frame. The reference-free SNR estimate is 10 log₁₀((P̄_speech − P̄_noise)/P̄_noise). It is a rough indicator only. For uploaded audio, SNR, SI-SDR and segmental SNR are reported as **n/a (no clean reference)** and never estimated.
+with a 3-frame hangover after each active frame. The 3 dB margin was chosen by measuring frame accuracy against the clean reference on the six synthetic noise types: at 0 dB SNR it scores 0.74–0.83, against 0.55–0.74 for a 6 dB margin; at 10 dB SNR both score about 0.72–0.89. Impulsive noise (clicks) is the weakest case. The reference-free SNR estimate is 10 log₁₀((P̄_speech − P̄_noise)/P̄_noise). It is a rough indicator only. For uploaded audio, SNR, SI-SDR and segmental SNR are reported as **n/a (no clean reference)** and never estimated.
 
 ## 9. Synthetic test mixtures
 

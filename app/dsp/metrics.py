@@ -66,9 +66,9 @@ def frame_energy_db(x: np.ndarray, frame: int = 512, hop: int = 256) -> np.ndarr
     return to_db(_frame_power(np.asarray(x, dtype=np.float64), frame, hop))
 
 
-def energy_vad(energy_db: np.ndarray, margin_db: float = 6.0, floor_percentile: float = 20.0,
+def energy_vad(energy_db: np.ndarray, margin_db: float = 3.0, floor_percentile: float = 20.0,
                hangover: int = 3) -> np.ndarray:
-    """Eq. (20): frame is speech if E(m) > P20{E} + 6 dB, extended by a short hangover.
+    """Eq. (20): frame is speech if E(m) > P20{E} + 3 dB, extended by a short hangover.
 
     Returns a boolean array (True = speech).
     """
