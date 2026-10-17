@@ -1,0 +1,160 @@
+# Spectral Subtraction — Algorithm Reference
+
+This is the single mathematical reference for the project. Both the **Simulink model (the primary implementation)** and the Python code in the NoiseLab web app (an extension) implement the steps below. Python source comments cite the equation numbers used here, e.g. `# Eq. (7)`.
+
+Main references:
+- S. F. Boll, "Suppression of acoustic noise in speech using spectral subtraction," *IEEE Trans. ASSP*, 27(2), 113–120, 1979.
+- M. Berouti, R. Schwartz, J. Makhoul, "Enhancement of speech corrupted by acoustic noise," *Proc. ICASSP*, 1979 (over-subtraction α and spectral floor β).
+
+---
+
+## 0. Signal model
+
+The observed signal is clean speech plus additive noise that is uncorrelated with it:
+
+$$y[n] = s[n] + d[n] \tag{0}$$
+
+In the short-time Fourier domain, |Y|² ≈ |S|² + |D|² on average, because the cross terms average out. So if we can estimate the noise spectrum, we can subtract it.
+
+## 1. Framing
+
+The signal is cut into frames of length N, starting every H samples:
+
+$$y_m[n] = y[mH + n],\quad 0 \le n < N,\qquad H = N\,(1-\text{overlap}) \tag{1}$$
+
+Default N = 512 and overlap 50 %, so H = 256. At 16 kHz that is a 32 ms frame and a 16 ms hop. Speech is roughly stationary over 20–40 ms, which is why these values are used.
+
+*Implementation detail (Python):* the signal is zero-padded by N − H samples at the start and end. Frame 0 then begins at original sample −(N − H), and every original sample is covered by the same number of frames. Reconstruction is then exact right up to the first and last sample (see §6).
+
+## 2. Window and FFT
+
+$$Y_k(m) = \sum_{n=0}^{N-1} w[n]\,y_m[n]\,e^{-j2\pi kn/N} \tag{2}$$
+
+$$|Y_k(m)|,\quad \angle Y_k(m) \tag{3}$$
+
+The window w is **periodic** Hann by default (MATLAB `hann(N,'periodic')`, SciPy `get_window('hann', N, fftbins=True)`). The periodic form matters because at 50 % and 75 % overlap it sums to an exact constant (constant-overlap-add, COLA):
+
+$$\sum_m w[n - mH] = \begin{cases}1 & \text{Hann, 50 \%}\\ 2 & \text{Hann, 75 \%}\end{cases}$$
+
+Other options are Hamming (also COLA, with constant 1.08 at 50 %) and sqrt-Hann (applied twice, at analysis and at synthesis, so the product is Hann). Python stores only the one-sided spectrum k = 0 … N/2, which is N/2 + 1 bins. The other half is the complex-conjugate mirror.
+
+## 3. Noise estimate
+
+All modes produce one magnitude value per frequency bin, |N̂_k|.
+
+**`initial`** (the default, and the only mode in the basic Simulink model): average over the M₀ complete frames inside the first T seconds, which are assumed to contain no speech:
+
+$$|\hat N_k| = \frac{1}{M_0}\sum_{m \in \mathcal{M}_0} |Y_k(m)| \tag{4}$$
+
+𝓜₀ contains the frames that start at samples 0, H, 2H, … and end at or before T·f_s. The Simulink `InitFcn` uses exactly these frames. If T is shorter than one frame, the single frame starting at 0 is used.
+
+**`region`**: Eq. (4) over the frames inside a user-selected interval [t₀, t₁]:
+
+$$|\hat N_k| = \frac{1}{|\mathcal{M}_R|}\sum_{m \in \mathcal{M}_R} |Y_k(m)|,\quad \mathcal{M}_R = \{m : t_0 f_s \le mH - (N-H),\ mH + H \le t_1 f_s\} \tag{5}$$
+
+**`profile`**: Eq. (4) over all complete frames of a separately recorded noise-only clip.
+
+**`minstats`** (simplified minimum statistics): a low percentile q (default 10 %) of the power in each bin over all frames:
+
+$$|\hat N_k| = \sqrt{\operatorname{P}_q\{|Y_k(m)|^2\}_m} \tag{6}$$
+
+This needs no silent segment. It is biased low, since it picks the quietest frames, and it fails if speech never pauses.
+
+## 4. Subtraction (Berouti over-subtraction with spectral floor)
+
+With exponent p (1 = magnitude subtraction, 2 = power subtraction):
+
+$$|\tilde S_k(m)|^p = \max\!\big(|Y_k(m)|^p - \alpha\,|\hat N_k|^p,\;\; \beta\,|\hat N_k|^p\big) \tag{7}$$
+
+- **α (over-subtraction, default 2.0):** removes more than the mean noise, so that noise peaks above the mean are suppressed too. A larger α gives less residual noise but more speech distortion.
+- **β (spectral floor, default 0.02):** never let a bin go below a small fraction of the noise. This replaces the isolated random peaks of "musical noise" with a smooth low-level background.
+
+The same operation written as a real gain:
+
+$$G_k(m) = \frac{|\tilde S_k(m)|}{|Y_k(m)|} \tag{8}$$
+
+*Note:* the floor is absolute (β|N̂|^p), so in bins where |Y| < β^{1/p}|N̂| the gain is **greater than 1**. Such bins are raised up to the floor. That is exactly what Eq. (7) says, and the Simulink model does the same.
+
+### Wiener-style variant (Python only, `method = wiener`)
+
+$$G_k(m) = \max\!\Big(1 - \alpha\,\frac{|\hat N_k|^2}{|Y_k(m)|^2},\;\beta\Big) \tag{9}$$
+
+### Extended refinements (Python only, off by default)
+
+Recursive time smoothing of the gain, with λ = `gain_smooth`:
+
+$$\bar G_k(m) = \lambda\,\bar G_k(m-1) + (1-\lambda)\,G_k(m) \tag{10}$$
+
+Moving average over `freq_smooth_bins` neighbouring bins:
+
+$$\bar G_k(m) = \frac{1}{B}\sum_{|i| \le B/2} \bar G_{k+i}(m) \tag{11}$$
+
+Both reduce musical noise, at the cost of temporal or spectral smearing. **Before smoothing, G is capped at 1.** Without the cap, the large >1 "floor-fill" gains described above would be spread into neighbouring bins and frames and amplify them. During development this lowered SNR from +12 dB to −4 dB on the white-noise demo with Hamming at 75 % overlap. The cap is applied only when smoothing is on, so the basic path still matches Simulink.
+
+## 5. Reconstruction with the noisy phase
+
+$$\hat S_k(m) = G_k(m)\,Y_k(m) = |\tilde S_k(m)|\,e^{j\angle Y_k(m)} \tag{12}$$
+
+The phase is not estimated. The phase of the noisy signal is reused. The ear is relatively insensitive to phase at the SNRs where spectral subtraction is used, and estimating the clean phase is a much harder problem. Multiplying by a real, non-negative G changes only the magnitude, so the two forms in Eq. (12) are identical.
+
+## 6. Inverse FFT and overlap-add
+
+$$\hat s[n] = \frac{\sum_m v[n-mH]\;\mathrm{IFFT}\{\hat S(m)\}[n-mH]}{\sum_m w[n-mH]\,v[n-mH]} \tag{13}$$
+
+Here v is the synthesis window: v = 1 for Hann and Hamming, v = w for sqrt-Hann. For **periodic Hann at 50 % overlap the denominator is exactly 1**, so Eq. (13) is plain overlap-add. That is what the Simulink model does: it adds the first half of each IFFT frame to the second half of the previous frame. Python divides by the window envelope so that 75 % overlap and the other windows also reconstruct exactly. The unit test checks STFT → ISTFT error < 10⁻⁶ for every window, N and overlap.
+
+## 7. Output stage
+
+$$x_\text{out} = g\,\hat s,\quad g = 10^{G_\text{dB}/20};\qquad x_\text{out} \leftarrow 0.99\,\frac{x_\text{out}}{\max|x_\text{out}|}\ \text{ only if }\max|x_\text{out}| > 0.99 \tag{14}$$
+
+The "removed noise" signal is computed as y − ŝ, using ŝ *before* the output stage. That way it shows what the algorithm removed, unaffected by the output gain.
+
+---
+
+## 8. Metrics
+
+**RMS level**
+
+$$L_\text{RMS} = 10\log_{10}\!\Big(\tfrac{1}{K}\textstyle\sum_{n=0}^{K-1} x[n]^2\Big)\ \text{dBFS} \tag{15}$$
+
+**SNR** (needs the clean reference s; demo mode only)
+
+$$\mathrm{SNR} = 10\log_{10}\frac{\sum s^2}{\sum (s-\hat s)^2} \tag{16}$$
+
+**SI-SDR** (Le Roux et al., 2019). This is scale-invariant, so an overall gain change does not affect it. Both signals are first made zero-mean.
+
+$$\mathrm{SI\text{-}SDR} = 10\log_{10}\frac{\|\gamma s\|^2}{\|\gamma s - \hat s\|^2},\quad \gamma = \frac{\langle \hat s, s\rangle}{\|s\|^2} \tag{17}$$
+
+**Segmental SNR**: the mean of the per-frame SNR (512-sample frames, 256 hop), each value clamped to [−10, 35] dB. Frames more than 40 dB below the loudest clean frame are skipped, because the synthetic source contains exact digital silence.
+
+$$\mathrm{SNR_{seg}} = \frac{1}{|\mathcal{F}|}\sum_{f\in\mathcal F} \operatorname{clip}_{[-10,35]}\Big(10\log_{10}\frac{\sum_{n\in f}s^2}{\sum_{n\in f}(s-\hat s)^2}\Big) \tag{18}$$
+
+**Noise reduction** (no reference needed): the mean attenuation over the frames the VAD labels as noise.
+
+$$\mathrm{NR} = \frac{1}{|\mathcal N|}\sum_{m\in\mathcal N}\big(E_y(m) - E_{\hat s}(m)\big)\ \text{dB} \tag{19}$$
+
+**Energy VAD**: frame m counts as speech if
+
+$$E(m) > \operatorname{P}_{20}\{E\} + 6\ \text{dB} \tag{20}$$
+
+with a 3-frame hangover after each active frame. The reference-free SNR estimate is 10 log₁₀((P̄_speech − P̄_noise)/P̄_noise). It is a rough indicator only. For uploaded audio, SNR, SI-SDR and segmental SNR are reported as **n/a (no clean reference)** and never estimated.
+
+## 9. Synthetic test mixtures
+
+The noise is scaled so that the SNR is exact:
+
+$$d' = d\sqrt{\frac{P_s}{P_d\,10^{\mathrm{SNR}/10}}},\qquad y = s + d' \tag{21}$$
+
+If the mixture's peak exceeds 0.9, clean, noise and mixture are all scaled by the same factor, which preserves the SNR.
+
+---
+
+## 10. Simulink vs Python: expected differences
+
+> The Simulink model has **not** been run by the author of this document (no MATLAB on the development machine). The points below are *expected* differences, to be confirmed with `scripts/compare_simulink_python.py`. This section will be updated with measured numbers.
+
+1. **Latency.** The Simulink Buffer, delay and Unbuffer chain delays the output by a whole number of hops relative to the input. Python has zero latency. The comparison script removes this lag by cross-correlation before comparing.
+2. **Edge frames.** Simulink's Buffer starts from zero initial conditions, so its first frames are partly zero. Python zero-pads by N − H. The two should match after alignment, except for at most one frame at each end.
+3. **Precision.** If the model runs in single precision, expect differences around 10⁻⁷ relative. In double precision they should be negligible.
+4. **Noise-estimate frames.** Both average the complete frames starting at 0, H, 2H, … inside the first T s (Eq. 4). Any difference here changes |N̂| and is visible everywhere. Check it first if the outputs disagree.
+5. **Exponent.** The basic Simulink chain does magnitude subtraction (p = 1). The "Match Simulink basic" preset therefore uses `exponent = 1`, while the Python default is p = 2 (power subtraction).

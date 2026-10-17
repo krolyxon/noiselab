@@ -1,0 +1,8 @@
+# Pinned after first successful install (Python 3.14, 2026-10-17). Python 3.10+ supported.
+flask==3.1.3
+numpy==2.5.4
+scipy==1.18.1
+soundfile==0.14.0
+pytest==9.1.1
+# Only used by scripts/compare_simulink_python.py (never imported by the web app).
+matplotlib==3.11.2

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+out/
+*.wav
+*.flac
+*.ogg
+*.mp3
+!tests/fixtures/*.wav
+.DS_Store
+*.asv
+slprj/
+*.slxc
