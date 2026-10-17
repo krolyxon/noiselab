@@ -227,3 +227,32 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
 .toast.error { border-left-color: var(--bad); }
 .toast.ok { border-left-color: var(--ok); }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0; } }
+
+/* ---------- recording ---------- */
+.rec { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.rec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.btn-rec { min-width: 108px; }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+.btn-rec.on { border-color: var(--bad); color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
+.btn-rec.on .rec-dot { border-radius: 2px; animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.rec-time { font-size: 15px; color: var(--muted); }
+.rec.recording .rec-time { color: var(--text); }
+/* Colour bands are fixed to dB positions (−60…−18 green, −18…−6 amber, > −6 red);
+   #meter-bar is a cover that hides the part above the current level. */
+.meter { position: relative; height: 8px; border-radius: 4px; border: 1px solid var(--border); overflow: hidden;
+  background: linear-gradient(to right, var(--ok) 0 70%, var(--noisy) 70% 90%, var(--bad) 90%); }
+.meter-bar { position: absolute; inset: 0 0 0 auto; width: 100%; background: var(--panel-2); transition: width 60ms linear; }
+.meter-peak { position: absolute; top: 0; bottom: 0; width: 2px; left: 0; background: var(--text); opacity: .8; }
+.meter-clip { position: absolute; right: 3px; top: -2px; font: 700 8px var(--mono); color: var(--bad); visibility: hidden; }
+.meter.clip .meter-clip { visibility: visible; }
+/* labels sit at their dB position on the linear −60…0 dBFS scale */
+.meter-scale { position: relative; height: 11px; font-size: 9px; color: var(--muted); }
+.meter-scale span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+.meter-scale span:first-child { transform: none; }
+.meter-scale span:last-child { transform: translateX(-100%); }
+.live { width: 100%; height: 84px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.btn-profile { color: var(--noise); border-color: color-mix(in srgb, var(--noise) 45%, transparent); }
+.btn-profile.on { background: color-mix(in srgb, var(--noise) 14%, transparent); }
+.profile-status { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--noise); }
+.hint.warn { color: var(--noisy); font-size: 11px; }

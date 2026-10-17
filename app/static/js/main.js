@@ -3,7 +3,8 @@
 import { Controls } from "./controls.js";
 import { renderMetrics } from "./metrics.js";
 import { ABPlayer } from "./player.js";
-import { Plots } from "./plots.js";
+import { colors, Plots } from "./plots.js";
+import { drawLive, micSupport, Recorder } from "./recorder.js";
 import { $, $$, api, debounce, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
 
@@ -195,7 +196,108 @@ function wireKeys() {
     if (tag === "INPUT" && e.target.type !== "range" || tag === "SELECT" || tag === "TEXTAREA") return;
     if (e.code === "Space") { e.preventDefault(); player.toggle(); }
     else if (e.key === "a" || e.key === "A") player.cycle();
+    else if (e.key === "r" || e.key === "R") toggleRecord();
   });
+}
+
+// ---------------------------------------------------------------------------- recording
+const PROFILE_SECONDS = 2;
+const recorder = new Recorder({
+  onLevel: drawLevel,
+  onTick: (t) => { $("#rec-time").textContent = clock(t); },
+});
+
+const clock = (t) => {
+  const m = Math.floor(t / 60), s = t - m * 60;
+  return `${String(m).padStart(2, "0")}:${s.toFixed(1).padStart(4, "0")}`;
+};
+const dbToPct = (db) => Math.max(0, Math.min(100, ((db + 60) / 60) * 100));   // meter spans −60…0 dBFS
+
+let clipUntil = 0;
+function drawLevel({ rmsDb, peakDb, clip, spectrum, scope, sr }) {
+  $("#meter-bar").style.width = `${100 - dbToPct(rmsDb)}%`;
+  $("#meter-peak").style.left = `calc(${dbToPct(peakDb)}% - 2px)`;
+  $("#meter").setAttribute("aria-valuenow", rmsDb.toFixed(1));
+  const now = performance.now();
+  if (clip) clipUntil = now + 1500;                  // hold the CLIP light for 1.5 s
+  $("#meter").classList.toggle("clip", now < clipUntil);
+  drawLive($("#live"), { spectrum, scope, sr }, colors());
+}
+
+function setRecUI(on, mode = null) {
+  const clipMode = on && mode === "clip", profMode = on && mode === "profile";
+  $("#rec").classList.toggle("recording", on);
+  $("#btn-rec").classList.toggle("on", clipMode);
+  $("#btn-rec-label").textContent = clipMode ? "Stop" : "Record";
+  $("#btn-rec").disabled = profMode;
+  $("#btn-profile").disabled = clipMode || profMode;
+  $("#btn-profile").classList.toggle("on", profMode);
+  $("#btn-profile").textContent = profMode ? "Listening — stay quiet…" : `Capture noise profile (${PROFILE_SECONDS} s)`;
+  $("#rec-hint").textContent = profMode
+    ? "Recording room noise only. Don’t speak."
+    : clipMode ? "Recording… press Stop (or R) to process."
+      : "Speak after ~1 s of silence: the first 0.5 s is used as the noise estimate.";
+  if (!on) {
+    $("#meter-bar").style.width = "100%";
+    $("#meter-peak").style.left = "0";
+    $("#meter").classList.remove("clip");
+  }
+}
+
+async function toggleRecord() {
+  if (recorder.state === "recording") { recorder.stop().catch(() => {}); return; }
+  if (recorder.state === "idle") await beginRecording("clip");
+}
+
+async function beginRecording(mode) {
+  const unsupported = micSupport();
+  if (unsupported) { toast(unsupported, "error"); return; }
+  player.pause();
+  try {
+    await recorder.start(mode === "profile" ? { seconds: PROFILE_SECONDS } : {});
+  } catch (e) {
+    toast(e.message, "error");
+    return;
+  }
+  setRecUI(true, mode);
+  recorder.finished
+    .then((clip) => onRecorded(clip, mode))
+    .catch((e) => toast(`Recording failed: ${e.message}`, "error"))
+    .finally(() => setRecUI(false));
+}
+
+async function onRecorded(clip, mode) {
+  if (!clip) return;
+  const minS = mode === "profile" ? 0.5 : 0.3;
+  if (clip.duration < minS) { toast(`Recording too short (${clip.duration.toFixed(2)} s).`, "error"); return; }
+  const wav = encodeWav(clip.mono, clip.sr);           // 16-bit PCM WAV, encoded in the browser
+  if (mode === "profile") {
+    const fd = new FormData();
+    fd.append("audio", wav, "noise-profile.wav");
+    setBusy(true, "uploading profile");
+    try {
+      const r = await api("/api/noise-profile", { method: "POST", body: fd });
+      setProfile(r);
+      controls.set({ noise_mode: "profile" });          // reprocesses the current clip, if any
+      toast(`Noise profile captured (${fmt(r.duration, 2, "s")}). Noise mode set to “Noise profile clip”.`, "ok");
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+    return;
+  }
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+  $("#empty-state").hidden = true;
+  plots.preview(envelope(clip.mono, clip.sr), clip.duration);
+  setClipInfo({ name: "recording", sr: clip.sr, duration: clip.duration });
+  await processUpload(wav, `recording-${stamp}.wav`).catch((e) => toast(e.message, "error"));
+}
+
+function setProfile(p) {
+  controls.setProfile(p?.profile_id ?? null);
+  $("#profile-status").hidden = !p;
+  $("#profile-info").textContent = p ? `Profile: ${fmt(p.duration, 2, "s")} @ ${p.sr} Hz` : "";
 }
 
 // ---------------------------------------------------------------------------- boot
@@ -224,6 +326,22 @@ async function boot() {
     toast("Using the exact parameters of the basic Simulink model.", "ok");
   });
   $("#btn-demo-quick").addEventListener("click", () => runDemo({ noise_type: "white", snr_db: 5 }));
+
+  recorder.maxSeconds = state.health.limits.max_duration_s;
+  const unsupported = micSupport();
+  if (unsupported) {
+    $("#btn-rec").disabled = $("#btn-profile").disabled = true;
+    $("#mic-unsupported").textContent = unsupported;
+    $("#mic-unsupported").hidden = false;
+  }
+  $("#btn-rec").addEventListener("click", toggleRecord);
+  $("#btn-profile").addEventListener("click", () => {
+    if (recorder.state === "idle") beginRecording("profile");
+  });
+  $("#btn-profile-clear").addEventListener("click", () => {
+    setProfile(null);
+    if (controls.get().noise_mode === "profile") controls.set({ noise_mode: "initial" });
+  });
 }
 
 boot();

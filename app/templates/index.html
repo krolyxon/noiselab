@@ -44,6 +44,35 @@
         <div class="btn-row">
           <button class="btn" id="btn-demo-quick" type="button" title="White noise at 5 dB SNR, synthetic voiced signal">Quick demo (white, 5 dB)</button>
         </div>
+
+        <div class="rec" id="rec">
+          <div class="rec-head">
+            <button class="btn btn-rec" id="btn-rec" type="button" title="Record from the microphone (R)">
+              <span class="rec-dot"></span><span id="btn-rec-label">Record</span>
+            </button>
+            <span class="rec-time mono" id="rec-time">00:00.0</span>
+          </div>
+          <div class="meter" id="meter" aria-label="Input level" role="meter" aria-valuemin="-60" aria-valuemax="0">
+            <div class="meter-bar" id="meter-bar"></div>
+            <div class="meter-peak" id="meter-peak"></div>
+            <span class="meter-clip" id="meter-clip">CLIP</span>
+          </div>
+          <div class="meter-scale mono" aria-hidden="true">
+            <span style="left:0%">−60</span><span style="left:33.33%">−40</span><span style="left:66.67%">−20</span>
+            <span style="left:100%">0 dBFS</span>
+          </div>
+          <canvas class="live" id="live" aria-label="Live spectrum and waveform"></canvas>
+          <p class="hint" id="rec-hint">Speak after ~1 s of silence: the first 0.5 s is used as the noise estimate.</p>
+          <button class="btn btn-block c-noise btn-profile" id="btn-profile" type="button"
+                  title="Record 2 s of room noise only (stay silent); used by the ‘Noise profile clip’ mode">
+            Capture noise profile (2 s)
+          </button>
+          <div class="profile-status" id="profile-status" hidden>
+            <span class="mono" id="profile-info"></span>
+            <button class="btn btn-ghost btn-sm" id="btn-profile-clear" type="button">Clear</button>
+          </div>
+          <p class="hint warn" id="mic-unsupported" hidden></p>
+        </div>
       </section>
 
       <section class="panel" id="params-panel">
