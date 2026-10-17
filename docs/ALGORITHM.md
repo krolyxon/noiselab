@@ -151,9 +151,13 @@ If the mixture's peak exceeds 0.9, clean, noise and mixture are all scaled by th
 
 ## 10. Simulink vs Python: expected differences
 
-> The Simulink model has **not** been run by the author of this document (no MATLAB on the development machine). The points below are *expected* differences, to be confirmed with `scripts/compare_simulink_python.py`. This section will be updated with measured numbers.
+> The Simulink model has **not** been run by the author of this document (no MATLAB on the development machine). The points below are *expected* differences, to be confirmed with `scripts/compare_simulink_python.py`.
+>
+> **What was measured:** `tests/test_simulink_chain.py` emulates the Simulink block chain frame by frame in Python (the same steps as `simulink/spectral_subtraction_reference.m`). Its output equals the Python STFT pipeline with the "Match Simulink basic" preset to within **3 × 10⁻¹⁶**, after a delay of exactly one hop (256 samples). The block design is therefore algorithmically identical. Remaining differences can only come from the MATLAB implementation details below.
+>
+> **Pitfall seen while testing the script:** if the two implementations get *different* inputs, for example one reads the 16-bit WAV and the other uses the original float signal, the noise estimate shifts slightly (up to 0.2 % in near-silent bins). That produces differences around 10⁻⁴ in bins where subtraction is active. Always give both implementations the same WAV file.
 
-1. **Latency.** The Simulink Buffer, delay and Unbuffer chain delays the output by a whole number of hops relative to the input. Python has zero latency. The comparison script removes this lag by cross-correlation before comparing.
+1. **Latency.** The overlap-add (Selector + Unit Delay + Add) delays the output by exactly one hop, H = 256 samples. `run_and_export.m` removes it. If your release's Buffer block adds further delay, the comparison script finds it by cross-correlation and reports it in samples and hops.
 2. **Edge frames.** Simulink's Buffer starts from zero initial conditions, so its first frames are partly zero. Python zero-pads by N − H. The two should match after alignment, except for at most one frame at each end.
 3. **Precision.** If the model runs in single precision, expect differences around 10⁻⁷ relative. In double precision they should be negligible.
 4. **Noise-estimate frames.** Both average the complete frames starting at 0, H, 2H, … inside the first T s (Eq. 4). Any difference here changes |N̂| and is visible everywhere. Check it first if the outputs disagree.
