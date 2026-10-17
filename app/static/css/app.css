@@ -21,6 +21,23 @@
   color-scheme: dark;
 }
 
+/* Light theme: same semantics, darker hues for contrast on white. */
+:root[data-theme="light"] {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --panel-2: #f2f5f8;
+  --border: #dce3ea;
+  --border-2: #c6d0db;
+  --text: #17212b;
+  --muted: #5b6977;
+  --noisy: #c06f00;
+  --clean: #0a7fa8;
+  --noise: #a8328f;
+  --ok: #138a59;
+  --bad: #cf3636;
+  color-scheme: light;
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -181,7 +198,9 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
 .playing .i-pause { display: block; }
 .playing .i-play { display: none; }
 .player .seg { width: auto; }
-.player .seg button { padding: 5px 12px; font-family: var(--font); }
+.player .seg button { padding: 5px 12px; font-family: var(--font); white-space: nowrap; }
+#btn-export { margin-left: auto; }
+@media (max-width: 1599px) { .kbd-hint { display: none; } }
 .time { font-size: 13px; }
 .kbd-hint { margin-left: auto; font-size: 11px; }
 
@@ -275,3 +294,33 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
 .insp-legend > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .sw.dash { background: repeating-linear-gradient(to right, var(--noise) 0 4px, transparent 4px 7px); }
 .sw.dot { background: repeating-linear-gradient(to right, var(--noise) 0 2px, transparent 2px 4px); }
+
+/* ---------- polish ---------- */
+.c-ok { --c: var(--ok); }
+.top-actions { display: inline-flex; gap: 4px; margin-left: 6px; }
+.busy-plots .plot { opacity: .72; transition: opacity .15s; }
+.dialog {
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; color: var(--text);
+  background: var(--panel); border: 1px solid var(--border-2); border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,.45);
+}
+.dialog-wide { width: min(820px, calc(100vw - 32px)); }
+.dialog::backdrop { background: rgba(5, 8, 12, .62); }
+.dialog-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.dialog-head h2 { font-size: 14px; }
+.keys { width: 100%; border-collapse: collapse; margin: 8px 0 12px; }
+.keys td { padding: 6px 16px; border-bottom: 1px solid var(--border); }
+.keys td:first-child { white-space: nowrap; width: 1%; color: var(--muted); }
+.method { padding: 4px 18px 18px; line-height: 1.6; }
+/* no text-transform here: uppercase would turn α, β into A, B */
+.method h3 { font-size: 13px; font-weight: 600; color: var(--text); margin: 18px 0 6px; }
+.method p, .method ul, .method ol { margin: 6px 0; }
+.method a { color: var(--clean); }
+.method code { font-family: var(--mono); font-size: 12px; }
+.callout { border-left: 3px solid var(--clean); background: color-mix(in srgb, var(--clean) 7%, transparent);
+  padding: 8px 12px; border-radius: 0 6px 6px 0; margin-top: 12px !important; }
+.eq { position: relative; padding: 6px 48px 6px 8px; overflow-x: auto; text-align: center; }
+.eq::after { content: "(" attr(data-n) ")"; position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  font: 11px var(--mono); color: var(--muted); }
+.eq .katex { font-size: 1.12em; }
+.refs li { margin-bottom: 4px; }

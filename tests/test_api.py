@@ -216,3 +216,40 @@ def test_frame_inspector_curves_match_method(client, demo_wav):
     # Wiener: floor is β·|Y| (−27.96 dB below |Y|), and |S̃| ≥ β·|Y|
     assert np.allclose(np.array(w["noisy_db"]) - np.array(w["floor_db"]), -20 * np.log10(0.04), atol=0.15)
     assert np.all(np.array(w["cleaned_db"]) >= np.array(w["floor_db"]) - 0.15)
+
+
+def _zip(resp):
+    import zipfile
+    assert resp.status_code == 200 and resp.mimetype == "application/zip", resp.data[:200]
+    return zipfile.ZipFile(io.BytesIO(resp.data))
+
+
+def test_export_zip_upload_and_demo(client, demo_wav):
+    jid = _upload(client, demo_wav, {"alpha": 3.0}).get_json()["job_id"]
+    z = _zip(client.get(f"/api/export/{jid}"))
+    assert {"noisy_input.wav", "cleaned.wav", "removed_noise.wav", "params.json", "metrics.json",
+            "README.txt"} <= set(z.namelist())
+    assert "clean_reference.wav" not in z.namelist()
+    assert json.loads(z.read("params.json"))["alpha"] == 3.0
+    assert json.loads(z.read("metrics.json"))["ground_truth"] is None
+    assert b"primary implementation" in z.read("README.txt")
+
+    d = client.post("/api/demo", json={"noise_type": "pink", "snr_db": 5, "duration": 3}).get_json()
+    assert "clean" in d["audio"] and client.get(d["audio"]["clean"]).status_code == 200
+    z = _zip(client.get(f"/api/export/{d['job_id']}"))
+    assert "clean_reference.wav" in z.namelist()
+    assert json.loads(z.read("metrics.json"))["ground_truth"]["snr_in_db"] == pytest.approx(5.0, abs=0.01)
+
+
+def test_export_with_plots_validated(client, demo_wav):
+    import base64 as b64
+    jid = _upload(client, demo_wav).get_json()["job_id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+    url = "data:image/png;base64," + b64.b64encode(png).decode()
+    z = _zip(client.post(f"/api/export/{jid}", json={"plots": {"../../evil name": url, "waveform": url}}))
+    assert "plots/waveform.png" in z.namelist()
+    assert all(".." not in n and not n.startswith("/") for n in z.namelist())
+    bad = "data:image/png;base64," + b64.b64encode(b"GIF89a....").decode()
+    assert client.post(f"/api/export/{jid}", json={"plots": {"x": bad}}).status_code == 400
+    assert client.post(f"/api/export/{jid}", json={"plots": {"x": "javascript:alert(1)"}}).status_code == 400
+    assert client.get("/api/export/" + "b" * 32).status_code == 404

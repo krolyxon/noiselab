@@ -1,3 +1,4 @@
+/* global Plotly */
 // App wiring: upload → process → plots/metrics/player; parameter changes → debounced reprocess.
 
 import { Controls } from "./controls.js";
@@ -24,6 +25,8 @@ function setBusy(on, text = "processing") {
   state.busy += on ? 1 : -1;
   $("#st-busy").hidden = state.busy <= 0;
   $("#st-busy-text").textContent = text;
+  // dim the plots (no layout change) while a newer result is being computed
+  document.querySelector(".col-centre").classList.toggle("busy-plots", state.busy > 0 && !!state.job);
 }
 
 function setClipInfo({ name, sr, duration }) {
@@ -52,11 +55,12 @@ const player = new ABPlayer({
     $("#t-now").textContent = t.toFixed(3);
     plots.setPlayhead(t);
   },
-  onState: ({ playing, source, ready }) => {
+  onState: ({ playing, source, ready, available }) => {
     $("#player").classList.toggle("playing", playing);
     $("#btn-play").disabled = !ready;
     for (const b of $$(".ab button")) {
-      b.disabled = !ready;
+      b.disabled = !ready || !available.includes(b.dataset.src);
+      if (b.dataset.src === "clean") b.hidden = !available.includes("clean");
       b.setAttribute("aria-checked", String(b.dataset.src === source));
     }
   },
@@ -80,6 +84,7 @@ function showResult(res, { newJob }) {
     ? `${res.demo.source} · ${res.demo.noise_type} · ${res.demo.snr_db} dB · ${res.demo.duration} s · seed ${res.demo.seed}`
     : "";
   inspector.refresh(res, { newJob });
+  $("#btn-export").disabled = false;
   const urls = newJob ? res.audio : { cleaned: res.audio.cleaned, noise: res.audio.noise };
   if (newJob) player.reset();
   player.load(urls).catch((e) => toast(e.message, "error"));
@@ -208,11 +213,13 @@ function wireDropzone() {
 function wireKeys() {
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector("dialog[open]")) return;     // Esc is handled by <dialog> itself
     const tag = e.target.tagName;
     if (tag === "INPUT" && e.target.type !== "range" || tag === "SELECT" || tag === "TEXTAREA") return;
     if (e.code === "Space") { e.preventDefault(); player.toggle(); }
     else if (e.key === "a" || e.key === "A") player.cycle();
     else if (e.key === "r" || e.key === "R") toggleRecord();
+    else if (e.key === "?") openDialog("#dlg-help");
     else if (e.key === ",") inspector.step(-1);
     else if (e.key === ".") inspector.step(1);
   });
@@ -293,6 +300,99 @@ function wireDemo() {
     if (!demoClean) opts.duration = +dur.value;
     runDemo(opts, demoClean);
   });
+}
+
+// ---------------------------------------------------------------------------- dialogs, theme, export
+function openDialog(sel) {
+  const d = $(sel);
+  if (d.open) return;
+  if (sel === "#dlg-method") renderEquations(d);
+  d.showModal();
+}
+for (const d of $$("dialog")) {
+  d.addEventListener("click", (e) => { if (e.target === d || e.target.closest("[data-close]")) d.close(); });
+}
+
+let eqRendered = false;
+function renderEquations(root) {
+  if (eqRendered) return;
+  if (!window.katex) {   // vendored script missing: show the TeX source rather than nothing
+    for (const n of $$("[data-tex]", root)) n.textContent = n.dataset.tex;
+    return;
+  }
+  for (const n of $$("[data-tex]", root)) {
+    window.katex.render(n.dataset.tex, n, { displayMode: n.classList.contains("eq"), throwOnError: false });
+  }
+  eqRendered = true;
+}
+
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("noiselab-theme", next); } catch { /* storage unavailable: theme lasts this visit */ }
+  if (state.job) {                     // plot colours are read from CSS at draw time
+    plots.update(state.job, { newJob: false });
+    drawSpectra($("#plot-spectra"), state.job.viz.spectra);
+    if (inspector.frame) drawInspector($("#plot-insp"), inspector.frame);
+  }
+}
+
+// name → [selector, title for the PNG, show a legend in the PNG?]
+const EXPORT_PLOTS = {
+  waveform: ["#plot-wave", "Waveform: noisy (amber) vs cleaned (cyan)", false],
+  spectrogram_noisy: ["#plot-spec-noisy", "Spectrogram, noisy |Y| (dBFS)", false],
+  spectrogram_cleaned: ["#plot-spec-cleaned", "Spectrogram, cleaned |Ŝ| (dBFS)", false],
+  spectrogram_removed: ["#plot-spec-removed", "Spectrogram, removed |Y − Ŝ| (dBFS)", false],
+  frame_energy_vad: ["#plot-energy", "Frame energy with energy-VAD speech frames (Eq. 20)", true],
+  gain_mask: ["#plot-gain", "Gain mask G(k, m), Eq. 8", false],
+  frame_inspector: ["#plot-insp", "STFT frame inspector", true],
+  noise_spectra: ["#plot-spectra", "Noise estimate |N̂| and mean spectra", true],
+};
+
+async function exportZip() {
+  if (!state.job) return;
+  setBusy(true, "exporting");
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--panel").trim();
+  const plotsPng = {};
+  try {
+    const fg = getComputedStyle(document.documentElement).getPropertyValue("--text").trim();
+    for (const [name, [sel, title, legend]] of Object.entries(EXPORT_PLOTS)) {
+      const div = $(sel);
+      if (!div.data) continue;
+      let titleText = title;
+      if (name === "frame_inspector" && inspector.frame) titleText += ` (frame ${inspector.frame.frame + 1}, t = ${inspector.frame.t.toFixed(3)} s)`;
+      // Opaque background, a title and (for multi-curve plots) a legend, so each PNG stands alone in a report.
+      const layout = {
+        ...div.layout, paper_bgcolor: bg, plot_bgcolor: bg,
+        title: { text: titleText, font: { size: 13, color: fg }, x: 0.01, xanchor: "left" },
+        margin: { ...div.layout.margin, t: legend ? 64 : 36 },
+        showlegend: legend,
+        legend: { orientation: "h", x: 0, y: 1.02, yanchor: "bottom", font: { size: 10, color: fg } },
+      };
+      plotsPng[name] = await Plotly.toImage({ data: div.data, layout },
+        { format: "png", width: Math.max(div.clientWidth, 720), height: Math.max(div.clientHeight, 260) + (legend ? 60 : 32), scale: 2 });
+    }
+  } catch (e) {
+    toast(`Plot images skipped (${e.message}); exporting audio and data only.`, "error");
+  }
+  try {
+    const res = await fetch(`/api/export/${state.job.job_id}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plots: plotsPng }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `${res.status}`);
+    const blob = await res.blob();
+    const name = /filename="?([^";]+)"?/.exec(res.headers.get("Content-Disposition") || "")?.[1] || "noiselab-export.zip";
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast(`Exported ${name}`, "ok");
+  } catch (e) {
+    toast(`Export failed: ${e.message}`, "error");
+  } finally {
+    setBusy(false);
+  }
 }
 
 // ---------------------------------------------------------------------------- recording
@@ -402,6 +502,10 @@ async function boot() {
   wireDropzone();
   wireKeys();
   wireDemo();
+  $("#btn-method").addEventListener("click", () => openDialog("#dlg-method"));
+  $("#btn-help").addEventListener("click", () => openDialog("#dlg-help"));
+  $("#btn-theme").addEventListener("click", toggleTheme);
+  $("#btn-export").addEventListener("click", exportZip);
   try {
     const [health, presets] = await Promise.all([api("/api/health"), api("/api/presets")]);
     state.health = health;

@@ -128,6 +128,8 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
         write_wav(job.dir / "original.wav", job.y, job.sr)
     write_wav(job.dir / "cleaned.wav", res.cleaned, job.sr)
     write_wav(job.dir / "noise.wav", removed, job.sr)
+    if job.version == 1 and job.clean is not None:
+        write_wav(job.dir / "clean.wav", job.clean, job.sr)
     job.last = {"params": p, "noise_mag": noise_mag, "gain": res.gain}
 
     elapsed = time.perf_counter() - t_start
@@ -143,12 +145,16 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
         "real_time_factor": _round(elapsed / job.duration, 4),
         "ground_truth": gt,
     }
+    job.last["metrics"] = m
     base = f"/api/audio/{job.id}"
+    audio = {k: f"{base}/{k}.wav?v={job.version}" for k in ("original", "cleaned", "noise")}
+    if job.clean is not None:
+        audio["clean"] = f"{base}/clean.wav?v=1"
     return {
         "job_id": job.id, "name": job.name, "sr": job.sr, "duration": _round(job.duration, 3),
         "version": job.version, "params": p.to_dict(), "metrics": m, "viz": viz,
         "demo": job.demo,
-        "audio": {k: f"{base}/{k}.wav?v={job.version}" for k in ("original", "cleaned", "noise")},
+        "audio": audio,
     }
 
 

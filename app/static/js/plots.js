@@ -11,7 +11,12 @@ const INFERNO = [
   [0.0, "#000004"], [0.1, "#160b39"], [0.2, "#420a68"], [0.3, "#6a176e"], [0.4, "#932667"],
   [0.5, "#bc3754"], [0.6, "#dd513a"], [0.7, "#f37819"], [0.8, "#fca50a"], [0.9, "#f6d746"], [1.0, "#fcffa4"],
 ];
-const DB_RANGE = 90;        // colour scale spans [max − 90, max] dBFS
+// Font stacks with generic fallbacks: exported PNGs are rasterised from SVG without
+// access to the page's webfonts, so they need a sans/mono fallback (not the serif default).
+const SANS = "Inter, 'Helvetica Neue', Arial, sans-serif";
+const MONO = "'JetBrains Mono', Consolas, 'DejaVu Sans Mono', monospace";
+const DB_RANGE = 90;
+const SEEK_CLICK_DELAY_MS = 220;   // single click → seek, unless it turns into a double-click        // colour scale spans [max − 90, max] dBFS
 // Viridis (perceptually uniform) for the gain mask: 0 = fully suppressed, 1 = passed unchanged.
 const VIRIDIS = [
   [0.0, "#440154"], [0.1, "#482878"], [0.2, "#3e4989"], [0.3, "#31688e"], [0.4, "#26828e"],
@@ -41,15 +46,15 @@ function axis(title, c, extra = {}) {
   return {
     title: { text: title, font: { size: 10, color: c.muted }, standoff: 4 },
     gridcolor: c.grid, zerolinecolor: c.grid, linecolor: c.grid, tickcolor: c.grid,
-    tickfont: { family: "JetBrains Mono", size: 9, color: c.muted }, ticklen: 3, ...extra,
+    tickfont: { family: MONO, size: 9, color: c.muted }, ticklen: 3, ...extra,
   };
 }
 
 function baseLayout(c, extra = {}) {
   return {
     paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
-    font: { family: "Inter", size: 10, color: c.muted }, showlegend: false,
-    hoverlabel: { bgcolor: c.panel, bordercolor: c.grid, font: { family: "JetBrains Mono", size: 10, color: c.text } },
+    font: { family: SANS, size: 10, color: c.muted }, showlegend: false,
+    hoverlabel: { bgcolor: c.panel, bordercolor: c.grid, font: { family: MONO, size: 10, color: c.text } },
     dragmode: "zoom", ...extra,
   };
 }
@@ -144,7 +149,7 @@ export class Plots {
         showscale: last,
         colorbar: last ? {
           title: { text: "dBFS", side: "right", font: { size: 10, color: c.muted } }, thickness: 8, len: 1, x: 1.02,
-          xpad: 0, outlinewidth: 0, tickfont: { family: "JetBrains Mono", size: 9, color: c.muted },
+          xpad: 0, outlinewidth: 0, tickfont: { family: MONO, size: 9, color: c.muted },
         } : undefined,
         hovertemplate: "%{x:.3f} s<br>%{y:.0f} Hz<br>%{z:.1f} dBFS<extra></extra>",
       };
@@ -165,7 +170,7 @@ export class Plots {
       type: "heatmap", x: sp.t, y: sp.f, z: decodeMatrix(gm), zmin: 0, zmax: 1, colorscale: VIRIDIS, zsmooth: false,
       colorbar: { title: { text: "G", side: "right", font: { size: 10, color: c.muted } }, thickness: 8, len: 1,
         x: 1.02, xpad: 0, outlinewidth: 0, tickvals: [0, 0.25, 0.5, 0.75, 1],
-        tickfont: { family: "JetBrains Mono", size: 9, color: c.muted } },
+        tickfont: { family: MONO, size: 9, color: c.muted } },
       hovertemplate: "%{x:.3f} s<br>%{y:.0f} Hz<br>G = %{z:.3f}<extra></extra>",
     };
     Plotly.react(this.gain, [trace], baseLayout(c, {
@@ -276,7 +281,12 @@ export class Plots {
    *  pointerup is caught on window: during a gesture Plotly lays a full-page "cover slip"
    *  over the document, so the up event does not reach the plot's own div. */
   _clickToSeek(div) {
-    div.addEventListener("pointerdown", (e) => { this._down = { div, x: e.clientX, y: e.clientY }; });
+    div.addEventListener("pointerdown", (e) => {
+      // A second press within the delay is a double-click (zoom reset): cancel the pending seek,
+      // otherwise the playhead redraw between the two clicks can break Plotly's double-click.
+      if (this._seekTimer) { clearTimeout(this._seekTimer); this._seekTimer = null; }
+      this._down = { div, x: e.clientX, y: e.clientY };
+    });
     if (this._upWired) return;
     this._upWired = true;
     window.addEventListener("pointerup", (e) => {
@@ -290,7 +300,11 @@ export class Plots {
       const py = e.clientY - box.top - fl._size.t;
       if (px < 0 || px > fl._size.w || py < 0 || py > fl._size.h) return;
       const t = fl.xaxis.p2c(px);
-      if (Number.isFinite(t) && this.onSeek) this.onSeek(Math.max(0, Math.min(t, this.duration ?? t)), down.div);
+      if (!Number.isFinite(t) || !this.onSeek) return;
+      this._seekTimer = setTimeout(() => {
+        this._seekTimer = null;
+        this.onSeek(Math.max(0, Math.min(t, this.duration ?? t)), down.div);
+      }, SEEK_CLICK_DELAY_MS);
     }, true);
   }
 

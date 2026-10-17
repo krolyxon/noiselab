@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import platform
+import zipfile
+from datetime import datetime, timezone
 from importlib.metadata import version as pkg_version
 from typing import Any
 
@@ -22,7 +26,9 @@ from .services.audio_io import AudioError, load_audio, supported_formats
 from .services.jobs import Job, JobStore, ProfileStore, valid_id
 
 bp = Blueprint("main", __name__)
-AUDIO_KINDS = ("original", "cleaned", "noise")
+AUDIO_KINDS = ("original", "cleaned", "noise", "clean")      # clean = demo ground truth only
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+MAX_PLOTS, MAX_PLOT_BYTES = 12, 4 * 1024 * 1024
 
 
 class APIError(Exception):
@@ -242,3 +248,69 @@ def frame(job_id: str):
         raise APIError("query parameter t (seconds) is required")
     with job.lock:
         return jsonify(processing.inspect_frame(job, t))
+
+
+@bp.route("/api/export/<job_id>", methods=["GET", "POST"])
+def export(job_id: str):
+    """ZIP: original/cleaned/removed-noise (and clean, demo only) WAVs, params.json, metrics.json,
+    README.txt — plus plot PNGs when POSTed as {"plots": {"name": "data:image/png;base64,..."}}."""
+    job = _get_job(job_id)
+    plots: dict[str, bytes] = {}
+    if request.method == "POST":
+        raw = _body_json().get("plots", {})
+        if not isinstance(raw, dict) or len(raw) > MAX_PLOTS:
+            raise APIError(f"plots must be an object with at most {MAX_PLOTS} entries")
+        for name, url in raw.items():
+            safe = secure_filename(str(name))[:40]
+            if not safe or not isinstance(url, str) or not url.startswith("data:image/png;base64,"):
+                raise APIError(f"plot {name!r} must be a PNG data URL")
+            try:
+                data = base64.b64decode(url.split(",", 1)[1], validate=True)
+            except ValueError as exc:
+                raise APIError(f"plot {name!r} is not valid base64") from exc
+            if not data.startswith(PNG_SIGNATURE) or len(data) > MAX_PLOT_BYTES:
+                raise APIError(f"plot {name!r} is not a PNG (or larger than 4 MB)")
+            plots[safe] = data
+
+    with job.lock:
+        if not job.last:
+            raise APIError("job has not been processed yet", 409)
+        params = job.last["params"].to_dict()
+        metrics = job.last["metrics"]
+        files = {k: job.dir / f"{k}.wav" for k in AUDIO_KINDS if (job.dir / f"{k}.wav").is_file()}
+        names = {"original": "noisy_input.wav", "cleaned": "cleaned.wav", "noise": "removed_noise.wav",
+                 "clean": "clean_reference.wav"}
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for k, path in files.items():
+                z.write(path, names[k])
+            z.writestr("params.json", json.dumps(params, indent=2))
+            z.writestr("metrics.json", json.dumps(metrics, indent=2))
+            for name, data in plots.items():
+                z.writestr(f"plots/{name}.png", data)
+            z.writestr("README.txt", _export_readme(job, params, sorted(names[k] for k in files), sorted(plots)))
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name=f"noiselab-{job.name}-{stamp}.zip", max_age=0)
+
+
+def _export_readme(job: Job, params: dict, wavs: list[str], plots: list[str]) -> str:
+    lines = [
+        f"NoiseLab {__version__} export — {job.name}",
+        f"Created {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        "",
+        "This web app is an extension of the Simulink model; the Simulink model is the primary implementation.",
+        "Algorithm: spectral subtraction (Boll 1979, Berouti et al. 1979) — see docs/ALGORITHM.md.",
+        "",
+        f"Sample rate {job.sr} Hz, duration {job.duration:.3f} s.",
+        "WAV files (16-bit PCM): " + ", ".join(wavs),
+        "  removed_noise.wav = noisy_input − cleaned (before output gain / peak protection).",
+        "params.json  — every parameter used for cleaned.wav.",
+        "metrics.json — ground-truth metrics are null unless this was a demo with a clean reference.",
+    ]
+    if plots:
+        lines.append("plots/       — " + ", ".join(f"{p}.png" for p in plots))
+    if job.demo:
+        lines += ["", "Demo: " + json.dumps(job.demo)]
+    return "\n".join(lines) + "\n"

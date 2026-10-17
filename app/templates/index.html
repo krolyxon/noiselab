@@ -8,10 +8,17 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Cpath d='M4 16h3l2-8 3 16 3-12 2 6 2-3h9' stroke='%234cc9f0' stroke-width='2.2' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/katex/katex.min.css') }}">
+  <script>
+    // Apply the saved theme before first paint (no flash). Storage may be unavailable.
+    try { const t = localStorage.getItem("noiselab-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
   <!-- Vendored so the app works offline / on lab networks that block CDNs.
        CDN fallback (only if the vendor folder is missing):
        <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script> -->
   <script src="{{ url_for('static', filename='vendor/plotly/plotly.min.js') }}"></script>
+  <!-- <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script> -->
+  <script defer src="{{ url_for('static', filename='vendor/katex/katex.min.js') }}"></script>
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +34,11 @@
       <span class="pill mono" id="st-sr" title="Sample rate">— Hz</span>
       <span class="pill mono" id="st-dur" title="Duration">—.— s</span>
       <span class="pill busy" id="st-busy" hidden><span class="spinner"></span><span id="st-busy-text">processing</span></span>
+      <span class="top-actions">
+        <button class="btn btn-ghost btn-sm" id="btn-method" type="button" title="Method, equations and references">Method</button>
+        <button class="btn btn-ghost btn-sm" id="btn-help" type="button" title="Keyboard shortcuts (?)">?</button>
+        <button class="btn btn-ghost btn-sm" id="btn-theme" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
+      </span>
     </div>
   </header>
 
@@ -139,9 +151,13 @@
           <button type="button" role="radio" data-src="original" class="c-noisy" aria-checked="false" disabled>Original</button>
           <button type="button" role="radio" data-src="cleaned" class="c-clean" aria-checked="true" disabled>Cleaned</button>
           <button type="button" role="radio" data-src="noise" class="c-noise" aria-checked="false" disabled>Removed</button>
+          <button type="button" role="radio" data-src="clean" class="c-ok" aria-checked="false" hidden
+                  title="Ground-truth clean signal (demo mode only)">Clean ref</button>
         </div>
         <div class="time mono"><span id="t-now">0.000</span><span class="muted"> / </span><span id="t-total">0.000</span><span class="muted"> s</span></div>
-        <div class="kbd-hint muted"><kbd>Space</kbd> play <kbd>A</kbd> switch</div>
+        <div class="kbd-hint muted"><kbd>Space</kbd> play <kbd>A</kbd> switch <kbd>?</kbd> help</div>
+        <button class="btn btn-sm" id="btn-export" type="button" disabled
+                title="ZIP: noisy / cleaned / removed WAVs, params.json, metrics.json and all plots as PNG">Export ZIP</button>
       </section>
 
       <section class="panel plot-panel">
@@ -225,6 +241,76 @@
   </footer>
 
   <div class="toasts" id="toasts" aria-live="assertive"></div>
+
+  <dialog class="dialog" id="dlg-help" aria-labelledby="dlg-help-title">
+    <div class="dialog-head"><h2 id="dlg-help-title">Keyboard shortcuts</h2>
+      <button class="btn btn-ghost btn-sm" data-close type="button" aria-label="Close">✕</button></div>
+    <table class="keys">
+      <tr><td><kbd>Space</kbd></td><td>Play / pause</td></tr>
+      <tr><td><kbd>A</kbd></td><td>Cycle Original → Cleaned → Removed (→ Clean ref in demo mode)</td></tr>
+      <tr><td><kbd>R</kbd></td><td>Start / stop microphone recording</td></tr>
+      <tr><td><kbd>,</kbd> <kbd>.</kbd></td><td>Previous / next STFT frame in the inspector</td></tr>
+      <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>Close dialogs</td></tr>
+      <tr><td>click</td><td>Any time plot: seek + inspect that frame</td></tr>
+      <tr><td>drag / double-click</td><td>Zoom (all time plots stay in sync) / reset zoom</td></tr>
+      <tr><td>double-click a slider</td><td>Reset that parameter to its default</td></tr>
+    </table>
+  </dialog>
+
+  <dialog class="dialog dialog-wide" id="dlg-method" aria-labelledby="dlg-method-title">
+    <div class="dialog-head"><h2 id="dlg-method-title">Method: spectral subtraction</h2>
+      <button class="btn btn-ghost btn-sm" data-close type="button" aria-label="Close">✕</button></div>
+    <div class="method">
+      <p class="callout"><strong>This web app is an extension of the Simulink model; the Simulink model is the primary implementation.</strong>
+        Both implement the steps below (the “Match Simulink basic” preset reproduces the model's settings exactly).
+        Equation numbers match <code>docs/ALGORITHM.md</code>.</p>
+
+      <h3>1 · Frame, window, FFT</h3>
+      <div class="eq" data-tex="y_m[n] = y[mH+n],\quad H = N(1-\text{overlap})" data-n="1"></div>
+      <div class="eq" data-tex="Y_k(m) = \sum_{n=0}^{N-1} w[n]\,y_m[n]\,e^{-j2\pi kn/N}" data-n="2"></div>
+      <p>Hann window (periodic), N = 512, 50 % overlap: 32 ms frames at 16 kHz, short enough for speech to be roughly stationary.</p>
+
+      <h3>2 · Estimate the noise spectrum</h3>
+      <div class="eq" data-tex="|\hat N_k| = \frac{1}{M_0}\sum_{m\in\mathcal M_0} |Y_k(m)|" data-n="4"></div>
+      <p>Mean magnitude of the frames in the first T = 0.5 s, assumed speech-free. Other modes: a selected region, a separately recorded noise profile, or a low percentile over all frames (“minimum statistics”).</p>
+
+      <h3>3 · Subtract, with over-subtraction α and spectral floor β</h3>
+      <div class="eq" data-tex="|\tilde S_k(m)|^p = \max\big(|Y_k(m)|^p - \alpha\,|\hat N_k|^p,\; \beta\,|\hat N_k|^p\big)" data-n="7"></div>
+      <div class="eq" data-tex="G_k(m) = \frac{|\tilde S_k(m)|}{|Y_k(m)|}" data-n="8"></div>
+      <p><strong>α &gt; 1</strong> removes more than the average noise, so random noise peaks are suppressed too (less residual noise, more speech distortion).
+        <strong>β</strong> stops bins from dropping to zero. Isolated surviving peaks are heard as <em>musical noise</em>, and the floor masks them with a smooth low-level background.
+        p = 1 is magnitude subtraction (the Simulink model), p = 2 is power subtraction.</p>
+      <p class="muted">Extended options (Python only, off by default): the Wiener-style gain
+        <span class="eq-inline" data-tex="G=\max(1-\alpha|\hat N|^2/|Y|^2,\ \beta)"></span> (Eq. 9), and smoothing of G over time and frequency (Eq. 10–11).</p>
+
+      <h3>4 · Reconstruct with the noisy phase</h3>
+      <div class="eq" data-tex="\hat S_k(m) = G_k(m)\,Y_k(m) = |\tilde S_k(m)|\,e^{\,j\angle Y_k(m)}" data-n="12"></div>
+      <div class="eq" data-tex="\hat s[n] = \sum_m \mathrm{IFFT}\{\hat S(m)\}[n-mH] \quad(\textstyle\sum_m w[n-mH] = 1\ \text{for Hann, 50\%})" data-n="13"></div>
+      <p>The ear is fairly insensitive to phase at moderate SNR, so the noisy phase is reused. Overlap-add of the IFFT frames rebuilds the waveform. The periodic Hann window at 50 % overlap sums to exactly 1, so no extra normalisation is needed.</p>
+
+      <h3>Metrics</h3>
+      <p>With a clean reference (demo mode): SNR <span class="eq-inline" data-tex="10\log_{10}\tfrac{\sum s^2}{\sum (s-\hat s)^2}"></span>, SI-SDR and segmental SNR.
+        Without one (uploads and recordings) these are shown as <em>n/a</em>. Never estimated. Reference-free indicators instead: noise reduction over VAD noise frames, and a rough VAD-based SNR estimate.</p>
+
+      <h3>Limitations</h3>
+      <ul>
+        <li>Assumes stationary noise: babble, clicks and changing noise are only partly removed.</li>
+        <li>Musical noise at high α / low β; speech distortion at low SNR.</li>
+        <li>The <code>initial</code> mode needs a speech-free lead-in.</li>
+      </ul>
+
+      <h3>References</h3>
+      <ol class="refs">
+        <li>S. F. Boll, “Suppression of acoustic noise in speech using spectral subtraction,” <em>IEEE Trans. Acoustics, Speech, and Signal Processing</em>, vol. 27, no. 2, pp. 113–120, 1979.
+          <a href="https://doi.org/10.1109/TASSP.1979.1163209" target="_blank" rel="noopener">doi:10.1109/TASSP.1979.1163209</a></li>
+        <li>M. Berouti, R. Schwartz, J. Makhoul, “Enhancement of speech corrupted by acoustic noise,” <em>Proc. ICASSP</em>, 1979, pp. 208–211.
+          <a href="https://doi.org/10.1109/ICASSP.1979.1170788" target="_blank" rel="noopener">doi:10.1109/ICASSP.1979.1170788</a></li>
+        <li>J. Le Roux et al., “SDR — half-baked or well done?,” <em>Proc. ICASSP</em>, 2019 (SI-SDR).</li>
+      </ol>
+      <p class="muted small">Testing status: the Python DSP, API and UI are covered by automated tests. The Simulink scripts were written without MATLAB and are marked UNTESTED. Their block design is verified by a Python emulation (<code>tests/test_simulink_chain.py</code>).</p>
+    </div>
+  </dialog>
 
   <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

@@ -2,7 +2,8 @@
 // All three are decoded AudioBuffers on one AudioContext; switching source while
 // playing restarts the new buffer at the same position with a 15 ms crossfade.
 
-export const SOURCES = ["original", "cleaned", "noise"];
+export const SOURCES = ["original", "cleaned", "noise", "clean"];   // "clean" = demo ground truth only
+const CORE = ["original", "cleaned", "noise"];
 const FADE = 0.015;
 
 export class ABPlayer {
@@ -34,7 +35,9 @@ export class ABPlayer {
     return Math.min(this.ctx.currentTime - this._t0, this.duration);
   }
 
-  get ready() { return SOURCES.every((k) => this.buffers[k]); }
+  get ready() { return CORE.every((k) => this.buffers[k]); }
+
+  get available() { return SOURCES.filter((k) => this.buffers[k]); }
 
   /** Fetch + decode the given URLs ({kind: url}); keeps position and play state. */
   async load(urls) {
@@ -58,6 +61,7 @@ export class ABPlayer {
   reset() {
     this.pause();
     this.buffers = {};
+    if (this.source === "clean") this.source = "cleaned";
     this.offset = 0;
     this.onTime?.(0);
     this._emitState();
@@ -97,7 +101,7 @@ export class ABPlayer {
   }
 
   setSource(kind) {
-    if (!SOURCES.includes(kind) || kind === this.source) return;
+    if (!this.buffers[kind] || kind === this.source) return;
     const t = this.time;
     this.source = kind;
     if (this.playing) {
@@ -107,7 +111,10 @@ export class ABPlayer {
     this._emitState();
   }
 
-  cycle() { this.setSource(SOURCES[(SOURCES.indexOf(this.source) + 1) % SOURCES.length]); }
+  cycle() {
+    const av = this.available;
+    if (av.length) this.setSource(av[(av.indexOf(this.source) + 1) % av.length]);
+  }
 
   // --- internals --------------------------------------------------------------------------
   _startNode(t) {
@@ -158,5 +165,7 @@ export class ABPlayer {
     this._raf = requestAnimationFrame(step);
   }
 
-  _emitState() { this.onState?.({ playing: this.playing, source: this.source, ready: this.ready }); }
+  _emitState() {
+    this.onState?.({ playing: this.playing, source: this.source, ready: this.ready, available: this.available });
+  }
 }
