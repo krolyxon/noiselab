@@ -55,8 +55,10 @@ def load_audio(data: bytes, *, max_duration: float, min_duration: float = 0.0,
     except AudioError:
         raise
     except (sf.LibsndfileError, RuntimeError, TypeError, ValueError) as exc:
-        raise AudioError("could not decode audio (supported: "
-                         f"{', '.join(supported_formats())}): {exc}", 415) from exc
+        # libsndfile messages embed the BytesIO repr; keep only the reason after the last colon.
+        reason = str(exc).rsplit(":", 1)[-1].strip().rstrip(".") or "unknown error"
+        raise AudioError(f"could not decode audio ({reason}); supported formats: "
+                         f"{', '.join(supported_formats())}", 415) from exc
 
     duration = x.shape[0] / sr
     if duration > max_duration:

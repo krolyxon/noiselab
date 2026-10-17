@@ -1,13 +1,124 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>NoiseLab</title>
+  <title>NoiseLab — Spectral Subtraction</title>
+  <meta name="description" content="Interactive spectral subtraction (Boll 1979). Web extension of the Simulink model.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f14'/%3E%3Cpath d='M4 16h3l2-8 3 16 3-12 2 6 2-3h9' stroke='%234cc9f0' stroke-width='2.2' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <!-- Vendored so the app works offline / on lab networks that block CDNs.
+       CDN fallback (only if the vendor folder is missing):
+       <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script> -->
+  <script src="{{ url_for('static', filename='vendor/plotly/plotly.min.js') }}"></script>
 </head>
 <body>
-  <h1>NoiseLab {{ version }}</h1>
-  <p>API is running. The interface is added in Milestone 3. See <a href="/api/health">/api/health</a>.</p>
-  <p>This web app is an extension of the Simulink model; the Simulink model is the primary implementation.</p>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M3 16h4l2-8 3 16 3-12 2 6 2-3h10" /></svg>
+      <div>
+        <h1>NoiseLab</h1>
+        <p class="brand-sub">Spectral subtraction · web extension of the Simulink model</p>
+      </div>
+    </div>
+    <div class="status" id="status" aria-live="polite">
+      <span class="pill" id="st-file" title="Current clip">no audio</span>
+      <span class="pill mono" id="st-sr" title="Sample rate">— Hz</span>
+      <span class="pill mono" id="st-dur" title="Duration">—.— s</span>
+      <span class="pill busy" id="st-busy" hidden><span class="spinner"></span><span id="st-busy-text">processing</span></span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- ============ LEFT: source + parameters ============ -->
+    <aside class="col col-left" aria-label="Controls">
+      <section class="panel" id="source-panel">
+        <h2 class="panel-title">Source</h2>
+        <label class="dropzone" id="dropzone" tabindex="0">
+          <input type="file" id="file-input" accept=".wav,.flac,.ogg,.oga,.mp3,.webm,.m4a,audio/*" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+          <span><strong>Drop an audio file</strong> or click to browse</span>
+          <span class="hint mono" id="formats-hint">WAV · FLAC · OGG · ≤ 25 MB · ≤ 120 s</span>
+        </label>
+        <div class="btn-row">
+          <button class="btn" id="btn-demo-quick" type="button" title="White noise at 5 dB SNR, synthetic voiced signal">Quick demo (white, 5 dB)</button>
+        </div>
+      </section>
+
+      <section class="panel" id="params-panel">
+        <div class="panel-head">
+          <h2 class="panel-title">Parameters</h2>
+          <button class="btn btn-ghost btn-sm" id="btn-reset" type="button" title="Reset all parameters to defaults">Reset</button>
+        </div>
+        <div class="field">
+          <label for="preset">Preset</label>
+          <select id="preset"><option value="">Custom</option></select>
+        </div>
+        <button class="btn btn-accent btn-block" id="btn-simulink" type="button"
+                title="Exactly the parameters of the basic Simulink model">Match Simulink basic</button>
+        <p class="preset-desc" id="preset-desc"></p>
+        <div id="param-groups"><p class="muted">Loading parameters…</p></div>
+      </section>
+    </aside>
+
+    <!-- ============ CENTRE: player + plots ============ -->
+    <section class="col col-centre" aria-label="Plots">
+      <section class="panel player" id="player">
+        <button class="btn btn-icon" id="btn-play" type="button" title="Play / pause (Space)" disabled>
+          <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+          <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>
+        </button>
+        <div class="seg ab" role="radiogroup" aria-label="Listen to (A cycles)">
+          <button type="button" role="radio" data-src="original" class="c-noisy" aria-checked="false" disabled>Original</button>
+          <button type="button" role="radio" data-src="cleaned" class="c-clean" aria-checked="true" disabled>Cleaned</button>
+          <button type="button" role="radio" data-src="noise" class="c-noise" aria-checked="false" disabled>Removed</button>
+        </div>
+        <div class="time mono"><span id="t-now">0.000</span><span class="muted"> / </span><span id="t-total">0.000</span><span class="muted"> s</span></div>
+        <div class="kbd-hint muted"><kbd>Space</kbd> play <kbd>A</kbd> switch</div>
+      </section>
+
+      <section class="panel plot-panel">
+        <div class="panel-head">
+          <h2 class="panel-title">Waveform <span class="legend"><i class="sw noisy"></i>noisy <i class="sw clean"></i>cleaned <i class="sw noise"></i>removed</span></h2>
+          <span class="muted small" id="region-hint" hidden>Drag on the waveform to select the noise region</span>
+        </div>
+        <div class="plot plot-wave" id="plot-wave"></div>
+        <div class="empty" id="empty-state">
+          <svg viewBox="0 0 120 40" aria-hidden="true"><path d="M0 20h20l5-12 6 24 6-18 5 10 4-6 4 4h70"/></svg>
+          <p><strong>No audio loaded.</strong></p>
+          <p class="muted">Drop a WAV/FLAC/OGG file on the left, or run the quick demo to see spectral subtraction on a synthetic voiced signal with known ground truth.</p>
+        </div>
+      </section>
+
+      <section class="panel plot-panel">
+        <div class="panel-head">
+          <h2 class="panel-title">Spectrograms <span class="muted small">shared colour scale · dBFS · click to seek</span></h2>
+        </div>
+        <div class="spec-row">
+          <div><div class="spec-label c-noisy">Noisy |Y|</div><div class="plot plot-spec" id="plot-spec-noisy"></div></div>
+          <div><div class="spec-label c-clean">Cleaned |Ŝ|</div><div class="plot plot-spec" id="plot-spec-cleaned"></div></div>
+          <div><div class="spec-label c-noise">Removed |Y − Ŝ|</div><div class="plot plot-spec" id="plot-spec-removed"></div></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ RIGHT: metrics ============ -->
+    <aside class="col col-right" aria-label="Metrics">
+      <section class="panel">
+        <h2 class="panel-title">Metrics</h2>
+        <div id="metrics"><p class="muted">Metrics appear after processing.</p></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="footer muted">
+    This web app is an extension of the Simulink model; the Simulink model is the primary implementation.
+    · Method: S. F. Boll, “Suppression of acoustic noise in speech using spectral subtraction,” IEEE Trans. ASSP, 1979.
+  </footer>
+
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
+
+  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
