@@ -63,10 +63,18 @@ def estimate_profile(noise_clip: np.ndarray, cfg: StftConfig) -> np.ndarray:
     return mean_magnitude(mag, idx)
 
 
-def estimate_minstats(mag: np.ndarray, percentile: float = 10.0) -> np.ndarray:
-    """Mode `minstats` (simplified minimum statistics), Eq. (6).
+def estimate_minstats(mag: np.ndarray, percentile: float = 20.0) -> np.ndarray:
+    """Mode `minstats` (simplified minimum statistics, bias-compensated), Eq. (6).
 
-    |N̂_k| = sqrt( P_q{ |Y_k(m)|² over all m } ), q = low percentile.
-    Needs no silent segment, but biases low (it picks the quietest frames).
+    A low percentile q of |Y_k(m)|² over all frames is dominated by noise-only frames,
+    but it is *biased low*: for Gaussian noise |Y|² is exponentially distributed, whose
+    q-quantile is −ln(1−q)·σ² (σ² = mean noise power). Dividing by −ln(1−q) gives σ²,
+    and √(π/4·σ²) converts it to the *mean magnitude* used by every other mode (Eq. 4;
+    E|Y| = √(π/4)·σ for a Rayleigh magnitude). Without this correction the 10th
+    percentile underestimates the noise by 8.7 dB (measured and in theory).
+
+        |N̂_k| = sqrt( (π/4) · P_q{|Y_k(m)|²} / (−ln(1 − q)) )
     """
-    return np.sqrt(np.percentile(mag**2, percentile, axis=0))
+    q = float(percentile) / 100.0
+    p_q = np.percentile(mag**2, percentile, axis=0)
+    return np.sqrt((np.pi / 4.0) * p_q / -np.log1p(-q))

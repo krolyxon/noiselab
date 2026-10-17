@@ -40,8 +40,9 @@ SCHEMA: dict[str, Spec] = {
     "region_start": Spec(float, 0.0, lo=0.0, hi=120.0, help="Noise region start (s), region mode."),
     "region_end": Spec(float, 0.5, lo=0.0, hi=120.0, help="Noise region end (s), region mode."),
     "profile_id": Spec(str, "", help="Noise profile id from /api/noise-profile, profile mode."),
-    "minstats_percentile": Spec(float, 10.0, lo=1.0, hi=50.0, extended=True,
-                                help="Low percentile of per-bin power used as the noise floor."),
+    "minstats_percentile": Spec(float, 20.0, lo=1.0, hi=50.0, extended=True,
+                                help="Low percentile of per-bin power used as the noise floor "
+                                     "(bias-compensated, Eq. 6)."),
     "alpha": Spec(float, 2.0, lo=1.0, hi=6.0, help="Over-subtraction factor α."),
     "beta": Spec(float, 0.02, lo=0.0, hi=0.2, help="Spectral floor β."),
     "exponent": Spec(int, 2, choices=(1, 2), help="1 = magnitude subtraction, 2 = power subtraction."),

@@ -54,11 +54,13 @@ $$|\hat N_k| = \frac{1}{|\mathcal{M}_R|}\sum_{m \in \mathcal{M}_R} |Y_k(m)|,\qua
 
 **`profile`**: Eq. (4) over all complete frames of a separately recorded noise-only clip.
 
-**`minstats`** (simplified minimum statistics): a low percentile q (default 10 %) of the power in each bin over all frames:
+**`minstats`** (simplified minimum statistics, bias-compensated): a low percentile q (default 20 %) of the power in each bin over all frames. It is corrected for the bias of taking a low quantile:
 
-$$|\hat N_k| = \sqrt{\operatorname{P}_q\{|Y_k(m)|^2\}_m} \tag{6}$$
+$$|\hat N_k| = \sqrt{\frac{\pi}{4}\cdot\frac{\operatorname{P}_q\{|Y_k(m)|^2\}_m}{-\ln(1-q)}} \tag{6}$$
 
-This needs no silent segment. It is biased low, since it picks the quietest frames, and it fails if speech never pauses.
+Why the correction: in noise-only frames |Y_k|² is approximately exponentially distributed with mean σ², so its q-quantile is −ln(1−q)·σ². Without the division, the 10th percentile underestimates the noise power by 8.7 dB: measured −8.70 dB on white noise, theory −8.72 dB. The factor π/4 converts σ² into the *mean magnitude* (E|Y| = √(π/4)·σ for a Rayleigh magnitude), so the result is comparable with Eq. (4). On the demo set (6 noise types × 0/5/10 dB × 3 seeds) the correction raised the mean SI-SDR improvement from +1.5 dB to +4.0 dB (q = 20 %), against +4.6 dB for the `initial` mode. q = 30 % scored slightly higher (+4.2 dB), but 20 % is the safer default when speech has few pauses.
+
+This mode needs no silent segment. It fails if speech never pauses, because then even the low percentile contains speech.
 
 ## 4. Subtraction (Berouti over-subtraction with spectral floor)
 

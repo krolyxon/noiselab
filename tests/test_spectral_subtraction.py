@@ -99,3 +99,13 @@ def test_region_too_short_raises(demo):
     mag = np.abs(stft(demo["noisy"], cfg))
     with pytest.raises(ValueError):
         estimate_region(mag, len(demo["noisy"]), SR, cfg, 1.0, 1.01)
+
+
+@pytest.mark.parametrize("q", [5.0, 10.0, 20.0, 30.0])
+def test_minstats_is_unbiased_on_pure_noise(q):
+    # Eq. (6): the bias-compensated percentile must match the mean-magnitude estimate (Eq. 4)
+    cfg = StftConfig()
+    noise = synth.make_noise("white", SR * 10, SR, seed=0) * 0.05
+    est = estimate_minstats(np.abs(stft(noise, cfg)), q)
+    true = estimate_profile(noise, cfg)
+    assert abs(20 * np.log10(np.median(est / true))) < 0.3
