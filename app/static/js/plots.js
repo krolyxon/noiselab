@@ -363,3 +363,37 @@ function spectraRange(arrays) {
   hi = Math.ceil(hi / 10) * 10 + 5;
   return [Math.max(lo, hi - 100), hi];
 }
+
+/** α × β sweep heatmap (β on a categorical axis: its grid is not uniform). */
+export function drawSweep(div, sw, metric, current) {
+  const c = colors();
+  const z = sw[metric];
+  const yLabels = sw.betas.map((b) => b.toFixed(3));
+  const xLabels = sw.alphas.map((a) => a.toFixed(1));
+  const flat = z.flat();
+  const zmin = Math.floor(Math.min(...flat)), zmax = Math.ceil(Math.max(...flat));
+  const shapes = [];
+  const ci = sw.betas.findIndex((b) => Math.abs(b - current.beta) < 1e-9);
+  const cj = sw.alphas.findIndex((a) => Math.abs(a - current.alpha) < 1e-9);
+  if (ci >= 0 && cj >= 0) {
+    shapes.push({ type: "rect", x0: cj - 0.5, x1: cj + 0.5, y0: ci - 0.5, y1: ci + 0.5, xref: "x", yref: "y",
+      line: { color: c.text, width: 2 } });
+  }
+  const bi = sw.betas.indexOf(sw.best.beta), bj = sw.alphas.indexOf(sw.best.alpha);
+  Plotly.react(div, [{
+    type: "heatmap", z, x: xLabels.map((_, j) => j), y: yLabels.map((_, i) => i), colorscale: VIRIDIS, zmin, zmax,
+    text: z.map((row) => row.map((v) => v.toFixed(1))), texttemplate: "%{text}",
+    textfont: { family: MONO, size: 9 },
+    customdata: z.map((row, i) => row.map((_, j) => [sw.alphas[j], sw.betas[i]])),
+    hovertemplate: "α = %{customdata[0]:.1f}<br>β = %{customdata[1]:.3f}<br>%{z:.2f} dB<extra></extra>",
+    colorbar: { title: { text: "dB", side: "right", font: { size: 10, color: c.muted } }, thickness: 8, len: 1,
+      outlinewidth: 0, tickfont: { family: MONO, size: 9, color: c.muted } },
+  }], baseLayout(c, {
+    margin: { l: 56, r: 50, t: 4, b: 34 },
+    xaxis: axis("over-subtraction α", c, { tickvals: xLabels.map((_, j) => j), ticktext: xLabels, fixedrange: true }),
+    yaxis: axis("spectral floor β", c, { tickvals: yLabels.map((_, i) => i), ticktext: yLabels, fixedrange: true }),
+    shapes,
+    annotations: bi >= 0 && bj >= 0 ? [{ x: bj, y: bi, text: "★", showarrow: false, xshift: 14, yshift: 8,
+      font: { size: 13, color: "#000000" } }] : [],   // best cell is always near the yellow end
+  }), { ...CONFIG, displayModeBar: false });
+}

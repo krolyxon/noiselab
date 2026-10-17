@@ -229,6 +229,16 @@ def _number(v: Any, name: str, lo: float, hi: float) -> float:
     return float(v)
 
 
+@bp.post("/api/sweep/<job_id>")
+def sweep(job_id: str):
+    """α × β grid of ground-truth improvements for a demo job (other params from the body)."""
+    job = _get_job(job_id)
+    p = validate(_body_json().get("params", {}))
+    profile = _profiles().get(p.profile_id) if p.noise_mode == "profile" and valid_id(p.profile_id) else None
+    with job.lock:
+        return jsonify(processing.sweep(job, p, profile))
+
+
 @bp.get("/api/audio/<job_id>/<kind>.wav")
 def audio(job_id: str, kind: str):
     if kind not in AUDIO_KINDS:

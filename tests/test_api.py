@@ -253,3 +253,20 @@ def test_export_with_plots_validated(client, demo_wav):
     assert client.post(f"/api/export/{jid}", json={"plots": {"x": bad}}).status_code == 400
     assert client.post(f"/api/export/{jid}", json={"plots": {"x": "javascript:alert(1)"}}).status_code == 400
     assert client.get("/api/export/" + "b" * 32).status_code == 404
+
+
+def test_sweep_demo_only(client, demo_wav):
+    d = client.post("/api/demo", json={"noise_type": "white", "snr_db": 5, "duration": 4}).get_json()
+    r = client.post(f"/api/sweep/{d['job_id']}", json={"params": {"exponent": 1}})
+    assert r.status_code == 200
+    j = r.get_json()
+    grid = np.array(j["si_sdr_improvement_db"])
+    assert grid.shape == (len(j["betas"]), len(j["alphas"])) == (7, 11)
+    # the grid point for the Simulink settings equals a normal run with those settings
+    i, k = j["betas"].index(0.02), j["alphas"].index(2.0)
+    run = client.post(f"/api/reprocess/{d['job_id']}", json={"params": {"exponent": 1}}).get_json()
+    assert grid[i, k] == pytest.approx(run["metrics"]["ground_truth"]["si_sdr_improvement_db"], abs=0.02)
+    assert j["best"]["si_sdr_improvement_db"] == pytest.approx(grid.max())
+    # uploads have no clean reference
+    jid = _upload(client, demo_wav).get_json()["job_id"]
+    assert client.post(f"/api/sweep/{jid}", json={}).status_code == 422

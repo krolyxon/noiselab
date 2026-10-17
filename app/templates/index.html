@@ -194,7 +194,7 @@
       <div class="two-col">
         <section class="panel plot-panel">
           <div class="panel-head">
-            <h2 class="panel-title">Gain mask G(k, m) <span class="muted small">0 = removed · 1 = kept · Eq. 8</span></h2>
+            <h2 class="panel-title">Gain mask <span class="math">G(k, m)</span> <span class="muted small">0 = removed · 1 = kept · Eq. 8</span></h2>
           </div>
           <div class="plot plot-gain" id="plot-gain"></div>
         </section>
@@ -218,6 +218,21 @@
           <p class="hint" id="insp-hint">Click any time plot to inspect that frame. Where the amber |Y| falls below the dashed magenta line, Eq. 7 clamps the bin to the dotted floor. Isolated survivors above the line are the source of “musical noise”.</p>
         </section>
       </div>
+
+      <section class="panel plot-panel" id="sweep-panel" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Parameter sweep <span class="math">α × β</span> <span class="muted small">demo · ground truth · click a cell to apply</span></h2>
+          <div class="sweep-actions">
+            <div class="seg seg-sm" role="radiogroup" aria-label="Sweep metric">
+              <button type="button" role="radio" data-metric="si_sdr_improvement_db" aria-checked="true">ΔSI-SDR</button>
+              <button type="button" role="radio" data-metric="snr_improvement_db" aria-checked="false">ΔSNR</button>
+            </div>
+            <button class="btn btn-sm btn-accent" id="btn-sweep" type="button">Run sweep</button>
+          </div>
+        </div>
+        <div class="plot plot-sweep" id="plot-sweep"></div>
+        <p class="hint" id="sweep-info">Runs 77 combinations of α and β with all other parameters as currently set, and scores each against the clean reference.</p>
+      </section>
     </section>
 
     <!-- ============ RIGHT: metrics ============ -->

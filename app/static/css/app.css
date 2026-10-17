@@ -324,3 +324,10 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
   font: 11px var(--mono); color: var(--muted); }
 .eq .katex { font-size: 1.12em; }
 .refs li { margin-bottom: 4px; }
+.plot-sweep { height: 300px; }
+.sweep-actions { display: flex; gap: 8px; align-items: center; }
+.seg-sm { width: auto; }
+.seg-sm button { padding: 2px 8px; font-size: 11px; }
+/* panel titles are uppercase; math inside them must keep its case (α, β, G(k, m)) */
+.panel-title .math, .panel-title .small, .panel-title .legend { text-transform: none; letter-spacing: 0; }
+.seg button { white-space: nowrap; }

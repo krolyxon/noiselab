@@ -11,9 +11,10 @@ from scipy.signal import resample_poly
 from ..dsp import metrics as M
 from ..dsp import viz_data as V
 from ..dsp.noise_estimation import estimate_initial, estimate_minstats, estimate_profile, estimate_region
-from ..dsp.spectral_subtraction import denoise, subtracted_magnitude
+from ..dsp.spectral_subtraction import compute_gain, denoise, subtracted_magnitude
+from ..dsp.stft import istft
 from ..dsp.stft import StftConfig, analysis_window, frame_times
-from ..params import Params
+from ..params import Params, validate
 from .audio_io import write_wav
 from .jobs import Job, NoiseProfile
 
@@ -192,4 +193,44 @@ def inspect_frame(job: Job, t: float) -> dict[str, Any]:
         "cleaned_db": np.round(V.mag_db(gain * y, cfg), 1).tolist(),
         "gain": np.round(np.minimum(gain, 10.0), 4).tolist(),
         "method": p.method, "exponent": p.exponent, "alpha": p.alpha, "beta": p.beta,
+    }
+
+
+SWEEP_ALPHAS = (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+SWEEP_BETAS = (0.0, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2)
+
+
+def sweep(job: Job, p: Params, profile: NoiseProfile | None = None,
+          alphas: tuple[float, ...] = SWEEP_ALPHAS, betas: tuple[float, ...] = SWEEP_BETAS) -> dict[str, Any]:
+    """Ground-truth SNR / SI-SDR improvement over an α × β grid (demo jobs only).
+
+    Every other parameter stays as in `p`. Reuses the cached STFT and noise estimate, so
+    each grid point costs only one gain computation + one ISTFT (no output stage).
+    """
+    if job.clean is None:
+        raise ProcessingError("the parameter sweep needs a clean reference — use demo mode")
+    t0 = time.perf_counter()
+    cfg = p.stft
+    spec, mag = job.spectrum(cfg)
+    noise_mag = estimate_noise(job, p, mag, profile)
+    c = job.clean
+    snr_in, sdr_in = M.snr_db(c, job.y), M.si_sdr_db(c, job.y)
+    snr = np.zeros((len(betas), len(alphas)))
+    sdr = np.zeros_like(snr)
+    for i, b in enumerate(betas):
+        for j, a in enumerate(alphas):
+            q = validate({"alpha": float(a), "beta": float(b)}, base=p)   # also range-checks
+            y = istft(compute_gain(mag, noise_mag, q.subtraction) * spec, len(job.y), cfg)
+            snr[i, j] = M.snr_db(c, y) - snr_in
+            sdr[i, j] = M.si_sdr_db(c, y) - sdr_in
+    bi, bj = np.unravel_index(np.argmax(sdr), sdr.shape)
+    return {
+        "alphas": list(alphas), "betas": list(betas),
+        "snr_improvement_db": np.round(snr, 2).tolist(),
+        "si_sdr_improvement_db": np.round(sdr, 2).tolist(),
+        "best": {"alpha": alphas[bj], "beta": betas[bi], "si_sdr_improvement_db": round(float(sdr[bi, bj]), 2),
+                 "snr_improvement_db": round(float(snr[bi, bj]), 2)},
+        "current": {"alpha": p.alpha, "beta": p.beta},
+        "fixed": {k: v for k, v in p.to_dict().items() if k not in ("alpha", "beta", "profile_id")},
+        "ms": round((time.perf_counter() - t0) * 1000, 1),
     }

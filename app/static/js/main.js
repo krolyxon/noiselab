@@ -4,7 +4,7 @@
 import { Controls } from "./controls.js";
 import { renderMetrics } from "./metrics.js";
 import { ABPlayer } from "./player.js";
-import { colors, drawInspector, drawSpectra, Plots } from "./plots.js";
+import { colors, drawInspector, drawSpectra, drawSweep, Plots } from "./plots.js";
 import { drawLive, micSupport, Recorder } from "./recorder.js";
 import { $, $$, api, debounce, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
@@ -85,6 +85,7 @@ function showResult(res, { newJob }) {
     : "";
   inspector.refresh(res, { newJob });
   $("#btn-export").disabled = false;
+  sweepUI.onResult(res, { newJob });
   const urls = newJob ? res.audio : { cleaned: res.audio.cleaned, noise: res.audio.noise };
   if (newJob) player.reset();
   player.load(urls).catch((e) => toast(e.message, "error"));
@@ -299,6 +300,62 @@ function wireDemo() {
     const opts = { noise_type: $("#demo-noise").value, snr_db: +snr.value, seed };
     if (!demoClean) opts.duration = +dur.value;
     runDemo(opts, demoClean);
+  });
+}
+
+// ---------------------------------------------------------------------------- α × β sweep (demo only)
+const sweepUI = {
+  data: null, metric: "si_sdr_improvement_db", key: null,
+
+  // Everything except α, β (and profile id) determines whether a computed sweep is still valid.
+  keyOf(p) { const { alpha, beta, profile_id, ...rest } = p; return JSON.stringify(rest); },
+
+  onResult(res, { newJob }) {
+    $("#sweep-panel").hidden = !res.demo;
+    if (newJob) { this.data = null; Plotly.purge($("#plot-sweep")); }
+    if (!this.data) return;
+    if (this.keyOf(res.params) !== this.key) {
+      $("#sweep-info").textContent = "Parameters other than α, β changed: run the sweep again to update.";
+      $("#plot-sweep").style.opacity = 0.4;
+    } else {
+      $("#plot-sweep").style.opacity = 1;
+      drawSweep($("#plot-sweep"), this.data, this.metric, res.params);
+    }
+  },
+
+  async run() {
+    if (!state.job?.demo) return;
+    const params = controls.request();
+    setBusy(true, "sweeping α × β");
+    try {
+      this.data = await postJSON(`/api/sweep/${state.job.job_id}`, { params });
+      this.key = this.keyOf(params);
+      $("#plot-sweep").style.opacity = 1;
+      drawSweep($("#plot-sweep"), this.data, this.metric, params);
+      if (!this.wired) {            // Plotly's .on() exists only after the first plot
+        $("#plot-sweep").on("plotly_click", (ev) => {
+          const [alpha, beta] = ev.points[0].customdata;
+          controls.set({ alpha, beta });
+        });
+        this.wired = true;
+      }
+      const b = this.data.best;
+      $("#sweep-info").textContent = `Best: α = ${b.alpha.toFixed(1)}, β = ${b.beta.toFixed(3)} → ΔSI-SDR ${fmt(b.si_sdr_improvement_db, 2, "dB")}, ` +
+        `ΔSNR ${fmt(b.snr_improvement_db, 2, "dB")} (★). Outline = current setting. ${this.data.alphas.length * this.data.betas.length} runs in ${fmt(this.data.ms, 0, "ms")}. ` +
+        "Higher scores can still sound ‘musical’: listen before choosing.";
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  },
+};
+$("#btn-sweep").addEventListener("click", () => sweepUI.run());
+for (const b of $$("#sweep-panel [data-metric]")) {
+  b.addEventListener("click", () => {
+    sweepUI.metric = b.dataset.metric;
+    for (const o of $$("#sweep-panel [data-metric]")) o.setAttribute("aria-checked", String(o === b));
+    if (sweepUI.data && state.job) drawSweep($("#plot-sweep"), sweepUI.data, sweepUI.metric, state.job.params);
   });
 }
 
