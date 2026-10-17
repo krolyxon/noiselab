@@ -114,7 +114,7 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
         "spectra": {
             "f": np.round(np.fft.rfftfreq(cfg.n_fft, 1 / job.sr), 2).tolist(),
             "noise_profile_db": np.round(V.mag_db(noise_mag, cfg), 1).tolist(),
-            "alpha_noise_db": np.round(V.mag_db(p.alpha ** (1 / p.exponent) * noise_mag, cfg), 1).tolist(),
+            "alpha_noise_db": np.round(V.mag_db(_subtracted_level(p) * noise_mag, cfg), 1).tolist(),
             "noisy_db": np.round(V.mean_spectrum_db(mag, cfg), 1).tolist(),
             "cleaned_db": np.round(V.mean_spectrum_db(mag_clean, cfg), 1).tolist(),
         },
@@ -152,6 +152,15 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
     }
 
 
+def _subtracted_level(p: Params) -> float:
+    """Magnitude-domain equivalent of what is subtracted, for plotting next to |Y|.
+
+    Spectral subtraction removes α·|N̂|^p, i.e. a magnitude of α^(1/p)·|N̂| (Eq. 7).
+    The Wiener gain (Eq. 9) reaches zero where |Y|² = α·|N̂|², i.e. |Y| = √α·|N̂|.
+    """
+    return p.alpha ** 0.5 if p.method == "wiener" else p.alpha ** (1.0 / p.exponent)
+
+
 def inspect_frame(job: Job, t: float) -> dict[str, Any]:
     """STFT frame inspector: |Y|, α|N̂| and |S̃| for the frame nearest to time t (all in dBFS)."""
     if not job.last:
@@ -164,12 +173,15 @@ def inspect_frame(job: Job, t: float) -> dict[str, Any]:
     y = mag[m]
     noise = job.last["noise_mag"]
     gain = job.last["gain"][m]
-    floor = subtracted_magnitude(np.zeros((1, len(noise))), noise, 0.0, p.beta, p.exponent)[0]
+    if p.method == "wiener":
+        floor = p.beta * y                                  # Eq. (9): G ≥ β  ⇒  |S̃| ≥ β·|Y|
+    else:
+        floor = subtracted_magnitude(np.zeros((1, len(noise))), noise, 0.0, p.beta, p.exponent)[0]  # β^(1/p)|N̂|
     return {
         "frame": m, "t": _round(float(times[m]), 4), "n_frames": int(mag.shape[0]),
         "f": np.round(np.fft.rfftfreq(cfg.n_fft, 1 / job.sr), 2).tolist(),
         "noisy_db": np.round(V.mag_db(y, cfg), 1).tolist(),
-        "alpha_noise_db": np.round(V.mag_db(p.alpha ** (1 / p.exponent) * noise, cfg), 1).tolist(),
+        "alpha_noise_db": np.round(V.mag_db(_subtracted_level(p) * noise, cfg), 1).tolist(),
         "floor_db": np.round(V.mag_db(floor, cfg), 1).tolist(),
         "cleaned_db": np.round(V.mag_db(gain * y, cfg), 1).tolist(),
         "gain": np.round(np.minimum(gain, 10.0), 4).tolist(),

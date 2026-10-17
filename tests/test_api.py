@@ -199,3 +199,20 @@ def test_job_expiry(app, client, demo_wav):
     store.get(jid).accessed -= 31 * 60
     assert client.post(f"/api/reprocess/{jid}", json={}).status_code == 404
     assert not job_dir.exists()
+
+
+def test_frame_inspector_curves_match_method(client, demo_wav):
+    jid = _upload(client, demo_wav, {"alpha": 4.0, "beta": 0.04, "exponent": 2}).get_json()["job_id"]
+    f = client.get(f"/api/frame/{jid}?t=2.0").get_json()
+    noisy, sub, floor, clean = (np.array(f[k]) for k in ("noisy_db", "alpha_noise_db", "floor_db", "cleaned_db"))
+    # spectral subtraction, p = 2: subtracted level is α^(1/2)|N̂| (+6.02 dB over |N̂| for α = 4),
+    # floor is β^(1/2)|N̂| (−13.98 dB); both relative to the same |N̂|
+    assert np.allclose(sub - floor, 20 * np.log10(2.0 / 0.2), atol=0.15)
+    # output never below the floor (up to the 0.1 dB rounding)
+    assert np.all(clean >= floor - 0.15)
+
+    client.post(f"/api/reprocess/{jid}", json={"params": {"method": "wiener", "alpha": 4.0, "beta": 0.04}})
+    w = client.get(f"/api/frame/{jid}?t=2.0").get_json()
+    # Wiener: floor is β·|Y| (−27.96 dB below |Y|), and |S̃| ≥ β·|Y|
+    assert np.allclose(np.array(w["noisy_db"]) - np.array(w["floor_db"]), -20 * np.log10(0.04), atol=0.15)
+    assert np.all(np.array(w["cleaned_db"]) >= np.array(w["floor_db"]) - 0.15)

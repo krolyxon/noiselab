@@ -256,3 +256,22 @@ input[type="range"]::-moz-range-thumb { width: 10px; height: 10px; border-radius
 .btn-profile.on { background: color-mix(in srgb, var(--noise) 14%, transparent); }
 .profile-status { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; color: var(--noise); }
 .hint.warn { color: var(--noisy); font-size: 11px; }
+
+/* ---------- science views ---------- */
+.plot-energy { height: 130px; }
+.plot-gain, .plot-insp { height: 250px; }
+.plot-spectra { height: 220px; }
+.two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 1599px) { .two-col { grid-template-columns: minmax(0, 1fr); } }
+.sw.vad { background: color-mix(in srgb, var(--ok) 35%, transparent); height: 8px; }
+.legend-block { margin-bottom: 4px; font-size: 11px; flex-wrap: wrap; }
+.insp-nav { display: flex; align-items: center; gap: 6px; }
+.file-btn { justify-content: flex-start; font-size: 12px; color: var(--muted); overflow: hidden; }
+.file-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plot:empty::before { content: "Load audio or run a demo to see this view."; display: flex; height: 100%;
+  align-items: center; justify-content: center; color: var(--muted); font-size: 11px;
+  border: 1px dashed var(--border); border-radius: 6px; }
+.insp-legend { gap: 10px; }
+.insp-legend > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.sw.dash { background: repeating-linear-gradient(to right, var(--noise) 0 4px, transparent 4px 7px); }
+.sw.dot { background: repeating-linear-gradient(to right, var(--noise) 0 2px, transparent 2px 4px); }

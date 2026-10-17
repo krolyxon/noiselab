@@ -3,7 +3,7 @@
 import { Controls } from "./controls.js";
 import { renderMetrics } from "./metrics.js";
 import { ABPlayer } from "./player.js";
-import { colors, Plots } from "./plots.js";
+import { colors, drawInspector, drawSpectra, Plots } from "./plots.js";
 import { drawLive, micSupport, Recorder } from "./recorder.js";
 import { $, $$, api, debounce, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
@@ -38,7 +38,9 @@ function setClipInfo({ name, sr, duration }) {
 const plots = new Plots({
   wave: $("#plot-wave"),
   specs: { noisy: $("#plot-spec-noisy"), cleaned: $("#plot-spec-cleaned"), removed: $("#plot-spec-removed") },
-  onSeek: (t) => player.seek(t),
+  gain: $("#plot-gain"),
+  energy: $("#plot-energy"),
+  onSeek: (t) => { player.seek(t); inspector.inspect(t); },
   onRegion: (a, b) => {
     if (b - a < 0.05) return;
     controls.set({ region_start: +a.toFixed(3), region_end: +b.toFixed(3) });
@@ -72,6 +74,12 @@ function showResult(res, { newJob }) {
   plots.update(res, { newJob });
   updateRegionOverlay();
   renderMetrics($("#metrics"), res.metrics);
+  drawSpectra($("#plot-spectra"), res.viz.spectra);
+  $("#noise-mode-label").textContent = res.params.noise_mode;
+  $("#demo-info").textContent = res.demo
+    ? `${res.demo.source} · ${res.demo.noise_type} · ${res.demo.snr_db} dB · ${res.demo.duration} s · seed ${res.demo.seed}`
+    : "";
+  inspector.refresh(res, { newJob });
   const urls = newJob ? res.audio : { cleaned: res.audio.cleaned, noise: res.audio.noise };
   if (newJob) player.reset();
   player.load(urls).catch((e) => toast(e.message, "error"));
@@ -146,10 +154,18 @@ export async function processUpload(blob, name) {
   }
 }
 
-async function runDemo(options) {
+async function runDemo(options, cleanFile = null) {
   setBusy(true, "generating demo");
   try {
-    const res = await postJSON("/api/demo", { ...options, params: controls.request() });
+    let res;
+    if (cleanFile) {
+      const fd = new FormData();
+      fd.append("clean", cleanFile, cleanFile.name);
+      fd.append("options", JSON.stringify({ ...options, params: controls.request() }));
+      res = await api("/api/demo", { method: "POST", body: fd });
+    } else {
+      res = await postJSON("/api/demo", { ...options, params: controls.request() });
+    }
     showResult(res, { newJob: true });
   } catch (e) {
     toast(e.message, "error");
@@ -197,6 +213,85 @@ function wireKeys() {
     if (e.code === "Space") { e.preventDefault(); player.toggle(); }
     else if (e.key === "a" || e.key === "A") player.cycle();
     else if (e.key === "r" || e.key === "R") toggleRecord();
+    else if (e.key === ",") inspector.step(-1);
+    else if (e.key === ".") inspector.step(1);
+  });
+}
+
+// ---------------------------------------------------------------------------- frame inspector
+const inspector = {
+  t: null, seq: 0, hopS: null, frame: null,
+
+  refresh(res, { newJob }) {
+    this.hopS = (res.params.n_fft * (1 - res.params.overlap)) / res.sr;
+    this.duration = res.duration;
+    // A new clip starts on a frame inside the speech (first VAD-speech frame + 0.25 s), else the middle.
+    if (newJob || this.t === null) {
+      const en = res.viz.energy, i = en.speech.findIndex((v) => v > 0);
+      this.t = i >= 0 ? Math.min(en.t[i] + 0.25, res.duration) : res.duration / 2;
+    }
+    this.inspect(this.t);
+  },
+
+  inspect: debounce(async function (t) {
+    if (!state.job) return;
+    inspector.t = t;
+    const seq = ++inspector.seq;
+    try {
+      const fr = await api(`/api/frame/${state.job.job_id}?t=${t.toFixed(4)}`);
+      if (seq !== inspector.seq) return;
+      inspector.frame = fr;
+      inspector.t = fr.t;
+      $("#insp-label").textContent = `frame ${fr.frame + 1}/${fr.n_frames} · t = ${fr.t.toFixed(3)} s`;
+      $("#insp-prev").disabled = fr.frame <= 0;
+      $("#insp-next").disabled = fr.frame >= fr.n_frames - 1;
+      drawInspector($("#plot-insp"), fr);
+    } catch (e) {
+      if (seq === inspector.seq) toast(`Frame inspector: ${e.message}`, "error");
+    }
+  }, 60),
+
+  step(dir) {
+    if (this.frame === null || this.hopS === null) return;
+    const t = Math.max(0, Math.min(this.duration, this.t + dir * this.hopS));
+    player.seek(t);
+    this.inspect(t);
+  },
+};
+$("#insp-prev").addEventListener("click", () => inspector.step(-1));
+$("#insp-next").addEventListener("click", () => inspector.step(1));
+
+// ---------------------------------------------------------------------------- demo panel
+let demoClean = null;
+function wireDemo() {
+  const snr = $("#demo-snr"), dur = $("#demo-dur");
+  const fill = (inp) => inp.style.setProperty("--fill", `${((inp.value - inp.min) / (inp.max - inp.min)) * 100}%`);
+  const sync = () => {
+    $("#demo-snr-out").textContent = `${(+snr.value).toFixed(0).replace("-", "−")} dB`;
+    $("#demo-dur-out").textContent = `${dur.value} s`;
+    fill(snr); fill(dur);
+  };
+  snr.addEventListener("input", sync);
+  dur.addEventListener("input", sync);
+  sync();
+  $("#demo-clean").addEventListener("change", (e) => {
+    demoClean = e.target.files[0] ?? null;
+    e.target.value = "";
+    $("#demo-clean-name").textContent = demoClean ? `Clean: ${demoClean.name}` : "Synthetic voiced signal (or choose a clean WAV…)";
+    $("#demo-clean-clear").hidden = !demoClean;
+    dur.disabled = !!demoClean;     // a user clean file sets its own duration
+  });
+  $("#demo-clean-clear").addEventListener("click", () => {
+    demoClean = null;
+    $("#demo-clean-name").textContent = "Synthetic voiced signal (or choose a clean WAV…)";
+    $("#demo-clean-clear").hidden = true;
+    dur.disabled = false;
+  });
+  $("#btn-demo").addEventListener("click", () => {
+    const seed = Math.max(0, Math.floor(+$("#demo-seed").value || 0));
+    const opts = { noise_type: $("#demo-noise").value, snr_db: +snr.value, seed };
+    if (!demoClean) opts.duration = +dur.value;
+    runDemo(opts, demoClean);
   });
 }
 
@@ -306,6 +401,7 @@ let controls;
 async function boot() {
   wireDropzone();
   wireKeys();
+  wireDemo();
   try {
     const [health, presets] = await Promise.all([api("/api/health"), api("/api/presets")]);
     state.health = health;

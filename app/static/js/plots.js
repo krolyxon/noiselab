@@ -12,6 +12,11 @@ const INFERNO = [
   [0.5, "#bc3754"], [0.6, "#dd513a"], [0.7, "#f37819"], [0.8, "#fca50a"], [0.9, "#f6d746"], [1.0, "#fcffa4"],
 ];
 const DB_RANGE = 90;        // colour scale spans [max − 90, max] dBFS
+// Viridis (perceptually uniform) for the gain mask: 0 = fully suppressed, 1 = passed unchanged.
+const VIRIDIS = [
+  [0.0, "#440154"], [0.1, "#482878"], [0.2, "#3e4989"], [0.3, "#31688e"], [0.4, "#26828e"],
+  [0.5, "#1f9e89"], [0.6, "#35b779"], [0.7, "#6ece58"], [0.8, "#b5de2b"], [0.9, "#dde318"], [1.0, "#fde725"],
+];
 
 /** "#rrggbb" → "rgba(r,g,b,a)" */
 export function rgba(hex, a) {
@@ -57,12 +62,15 @@ const playheadShape = (c, t = 0) => ({
 // ----------------------------------------------------------------------------------------
 
 export class Plots {
-  constructor({ wave, specs, onSeek, onRegion }) {
+  constructor({ wave, specs, gain, energy, onSeek, onRegion }) {
     this.wave = wave;
     this.specs = specs;                         // {noisy, cleaned, removed}
+    this.gain = gain;
+    this.energy = energy;
     this.onSeek = onSeek;
     this.onRegion = onRegion;
-    this.timePlots = [wave, specs.noisy, specs.cleaned, specs.removed];
+    this.timePlots = [wave, specs.noisy, specs.cleaned, specs.removed, gain, energy];
+    this.freqPlots = [specs.noisy, specs.cleaned, specs.removed, gain];   // share the frequency zoom
     this.xr = null;                             // shared time range [a, b] or null = full clip
     this.fr = null;                             // shared spectrogram frequency range or null = full
     this.region = null;                         // {x0, x1, label}
@@ -84,6 +92,8 @@ export class Plots {
     this.duration = res.duration;
     this._drawWave(res.viz.waveform, res.duration);
     this._drawSpecs(res.viz.spectrogram, res.duration);
+    this._drawGain(res.viz.gain_mask, res.viz.spectrogram, res.duration);
+    this._drawEnergy(res.viz.energy, res.duration);
     if (!this._ready) { this._wire(); this._ready = true; }
   }
 
@@ -148,6 +158,47 @@ export class Plots {
     }
   }
 
+  // --- gain mask G(k, m) -----------------------------------------------------------------
+  _drawGain(gm, sp, duration) {
+    const c = colors();
+    const trace = {
+      type: "heatmap", x: sp.t, y: sp.f, z: decodeMatrix(gm), zmin: 0, zmax: 1, colorscale: VIRIDIS, zsmooth: false,
+      colorbar: { title: { text: "G", side: "right", font: { size: 10, color: c.muted } }, thickness: 8, len: 1,
+        x: 1.02, xpad: 0, outlinewidth: 0, tickvals: [0, 0.25, 0.5, 0.75, 1],
+        tickfont: { family: "JetBrains Mono", size: 9, color: c.muted } },
+      hovertemplate: "%{x:.3f} s<br>%{y:.0f} Hz<br>G = %{z:.3f}<extra></extra>",
+    };
+    Plotly.react(this.gain, [trace], baseLayout(c, {
+      margin: { l: 44, r: 50, t: 4, b: 28 },
+      xaxis: axis("time (s)", c, { range: this.xr ?? [0, duration] }),
+      yaxis: axis("frequency (Hz)", c, { range: this.fr ?? [0, sp.f[sp.f.length - 1]] }),
+      shapes: [playheadShape(c, this._t ?? 0)],
+    }), CONFIG);
+  }
+
+  // --- frame energy + VAD -----------------------------------------------------------------
+  _drawEnergy(en, duration) {
+    const c = colors();
+    const all = [...en.noisy_db, ...en.cleaned_db].filter(Number.isFinite);
+    const lo = Math.max(-100, Math.floor(Math.min(...all) / 10) * 10), hi = Math.ceil(Math.max(...all) / 10) * 10 + 5;
+    const traces = [
+      // VAD shading on a hidden 0…1 axis: green where the energy VAD says "speech"
+      { x: en.t, y: en.speech, yaxis: "y2", type: "scatter", mode: "lines", line: { width: 0, shape: "hv" },
+        fill: "tozeroy", fillcolor: rgba(c.ok, 0.10), hoverinfo: "skip", name: "speech (VAD)" },
+      { x: en.t, y: en.noisy_db, type: "scatter", mode: "lines", line: { color: c.noisy, width: 1 }, name: "noisy",
+        hovertemplate: "%{x:.3f} s · noisy %{y:.1f} dBFS<extra></extra>" },
+      { x: en.t, y: en.cleaned_db, type: "scatter", mode: "lines", line: { color: c.clean, width: 1 }, name: "cleaned",
+        hovertemplate: "%{x:.3f} s · cleaned %{y:.1f} dBFS<extra></extra>" },
+    ];
+    Plotly.react(this.energy, traces, baseLayout(c, {
+      margin: { l: 44, r: 50, t: 4, b: 28 },
+      xaxis: axis("time (s)", c, { range: this.xr ?? [0, duration] }),
+      yaxis: axis("energy (dBFS)", c, { range: [lo, hi], fixedrange: true }),
+      yaxis2: { overlaying: "y", range: [0, 1], visible: false, fixedrange: true },
+      shapes: [playheadShape(c, this._t ?? 0)],
+    }), CONFIG);
+  }
+
   // --- noise region overlay -------------------------------------------------------------
   /** region = {x0, x1, editable} or null. Drawn in magenta (estimated noise colour). */
   setRegion(region) {
@@ -210,36 +261,91 @@ export class Plots {
       return undefined;                                       // this axis did not change
     };
     const xr = pick("xaxis");
-    const fr = src === this.wave ? undefined : pick("yaxis");
+    const fr = this.freqPlots.includes(src) ? pick("yaxis") : undefined;
     if (xr === undefined && fr === undefined) return;         // e.g. playhead/shape updates
     if (xr !== undefined) this.xr = xr;
     if (fr !== undefined) this.fr = fr;
     this._syncing = true;
     const x = { "xaxis.range": this.xr ?? [0, this.duration] };
     const f = { ...x, "yaxis.range": this.fr ?? [0, this.fmax] };
-    Promise.all(this.timePlots.filter((d) => d.layout).map((d) => Plotly.relayout(d, d === this.wave ? x : f)))
+    Promise.all(this.timePlots.filter((d) => d.layout).map((d) => Plotly.relayout(d, this.freqPlots.includes(d) ? f : x)))
       .finally(() => { this._syncing = false; });
   }
 
-  /** A click (not a drag) anywhere in the plot area seeks to that time. */
+  /** A click (not a drag) anywhere in the plot area seeks to that time.
+   *  pointerup is caught on window: during a gesture Plotly lays a full-page "cover slip"
+   *  over the document, so the up event does not reach the plot's own div. */
   _clickToSeek(div) {
-    let down = null;
-    div.addEventListener("pointerdown", (e) => { down = { x: e.clientX, y: e.clientY }; });
-    div.addEventListener("pointerup", (e) => {
+    div.addEventListener("pointerdown", (e) => { this._down = { div, x: e.clientX, y: e.clientY }; });
+    if (this._upWired) return;
+    this._upWired = true;
+    window.addEventListener("pointerup", (e) => {
+      const down = this._down;
+      this._down = null;
       if (!down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
-      const fl = div._fullLayout;
+      const fl = down.div._fullLayout;
       if (!fl?.xaxis) return;
-      const box = div.getBoundingClientRect();
+      const box = down.div.getBoundingClientRect();
       const px = e.clientX - box.left - fl._size.l;
       const py = e.clientY - box.top - fl._size.t;
       if (px < 0 || px > fl._size.w || py < 0 || py > fl._size.h) return;
       const t = fl.xaxis.p2c(px);
-      if (Number.isFinite(t) && this.onSeek) this.onSeek(Math.max(0, Math.min(t, this.duration ?? t)), div);
-    });
+      if (Number.isFinite(t) && this.onSeek) this.onSeek(Math.max(0, Math.min(t, this.duration ?? t)), down.div);
+    }, true);
   }
 
   purgeAll() {
     for (const d of this.timePlots) Plotly.purge(d);
     this._ready = false;
   }
+}
+
+// ---------------------------------------------------------------------------------------
+// Frequency-domain plots (not time-synchronised).
+
+/** Noise estimate |N̂| with the mean noisy and cleaned spectra overlaid (dBFS vs Hz). */
+export function drawSpectra(div, sp) {
+  const c = colors();
+  const line = (y, color, name, dash) => ({ x: sp.f, y, type: "scatter", mode: "lines", name,
+    line: { color, width: 1.3, dash }, hovertemplate: `%{x:.0f} Hz · ${name} %{y:.1f} dBFS<extra></extra>` });
+  Plotly.react(div, [
+    line(sp.noisy_db, c.noisy, "mean noisy"),
+    line(sp.cleaned_db, c.clean, "mean cleaned"),
+    line(sp.noise_profile_db, c.noise, "noise |N̂|"),
+  ], baseLayout(c, {
+    margin: { l: 40, r: 6, t: 4, b: 28 },
+    xaxis: axis("frequency (Hz)", c, { type: "log", range: [Math.log10(40), Math.log10(sp.f[sp.f.length - 1])],
+      tickvals: [50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000], ticktext: ["50", "100", "200", "500", "1k", "2k", "5k", "10k", "20k"] }),
+    yaxis: axis("dBFS", c, { range: spectraRange([sp.noisy_db, sp.cleaned_db, sp.noise_profile_db]) }),
+  }), { ...CONFIG, displayModeBar: false });
+}
+
+/** STFT frame inspector: |Y|, α|N̂| (what gets subtracted), floor β|N̂| and the result |S̃| = G·|Y|. */
+export function drawInspector(div, fr) {
+  const c = colors();
+  const wiener = fr.method === "wiener";
+  const lbl = wiener ? "√α·|N̂| (G = 0 below)" : `α^(1/p)·|N̂| subtracted (p = ${fr.exponent})`;
+  const floorLbl = wiener ? "floor β·|Y|" : "floor β^(1/p)·|N̂|";
+  document.getElementById("insp-l-sub").textContent = lbl;
+  document.getElementById("insp-l-floor").textContent = floorLbl;
+  const line = (y, color, name, extra = {}) => ({ x: fr.f, y, type: "scatter", mode: "lines", name,
+    line: { color, width: 1.2, ...extra }, hovertemplate: `%{x:.0f} Hz · ${name.split(" ")[0]} %{y:.1f} dBFS<extra></extra>` });
+  Plotly.react(div, [
+    line(fr.noisy_db, c.noisy, "|Y| noisy"),
+    line(fr.alpha_noise_db, c.noise, lbl, { dash: "dash" }),
+    line(fr.floor_db, c.noise, floorLbl, { dash: "dot", width: 1 }),
+    line(fr.cleaned_db, c.clean, "|S̃| = G·|Y|", { width: 1.6 }),
+  ], baseLayout(c, {
+    margin: { l: 44, r: 8, t: 6, b: 28 },
+    xaxis: axis("frequency (Hz)", c, { range: [0, fr.f[fr.f.length - 1]] }),
+    yaxis: axis("dBFS", c, { range: spectraRange([fr.noisy_db, fr.cleaned_db, fr.alpha_noise_db]) }),
+    hovermode: "x unified",
+  }), CONFIG);
+}
+
+function spectraRange(arrays) {
+  let hi = -Infinity, lo = Infinity;
+  for (const a of arrays) for (const v of a) { if (v > hi) hi = v; if (v < lo) lo = v; }
+  hi = Math.ceil(hi / 10) * 10 + 5;
+  return [Math.max(lo, hi - 100), hi];
 }

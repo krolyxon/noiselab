@@ -75,6 +75,43 @@
         </div>
       </section>
 
+      <section class="panel" id="demo-panel">
+        <h2 class="panel-title">Demo mode <span class="muted small">ground truth known</span></h2>
+        <div class="field">
+          <label for="demo-noise">Noise type</label>
+          <select id="demo-noise">
+            <option value="white">White</option>
+            <option value="pink">Pink (−3 dB/oct)</option>
+            <option value="hum50">Mains hum 50 Hz + harmonics</option>
+            <option value="fan">Fan / AC</option>
+            <option value="babble">Babble-like</option>
+            <option value="clicks">Clicks</option>
+          </select>
+        </div>
+        <div class="field">
+          <div class="field-label"><span>Input SNR <span class="sym">SNR</span></span><span class="readout" id="demo-snr-out">5 dB</span></div>
+          <input type="range" id="demo-snr" min="-5" max="20" step="1" value="5" aria-label="Input SNR (dB)">
+        </div>
+        <div class="field">
+          <div class="field-label"><span>Duration</span><span class="readout" id="demo-dur-out">6 s</span></div>
+          <input type="range" id="demo-dur" min="2" max="20" step="1" value="6" aria-label="Duration (s)">
+        </div>
+        <div class="field">
+          <label for="demo-seed">Seed <span class="sym">deterministic</span></label>
+          <input type="number" id="demo-seed" min="0" step="1" value="0">
+        </div>
+        <div class="field">
+          <div class="field-label"><span>Clean source</span>
+            <button class="btn btn-ghost btn-sm" id="demo-clean-clear" type="button" hidden>Use synthetic</button></div>
+          <label class="btn btn-block btn-ghost file-btn">
+            <input type="file" id="demo-clean" accept=".wav,.flac,.ogg,audio/*" hidden>
+            <span id="demo-clean-name">Synthetic voiced signal (or choose a clean WAV…)</span>
+          </label>
+        </div>
+        <button class="btn btn-accent btn-block" id="btn-demo" type="button">Generate &amp; process</button>
+        <p class="hint" id="demo-info"></p>
+      </section>
+
       <section class="panel" id="params-panel">
         <div class="panel-head">
           <h2 class="panel-title">Parameters</h2>
@@ -130,6 +167,41 @@
           <div><div class="spec-label c-noise">Removed |Y − Ŝ|</div><div class="plot plot-spec" id="plot-spec-removed"></div></div>
         </div>
       </section>
+
+      <section class="panel plot-panel">
+        <div class="panel-head">
+          <h2 class="panel-title">Frame energy <span class="legend"><i class="sw noisy"></i>noisy <i class="sw clean"></i>cleaned <i class="sw vad"></i>speech (energy VAD, Eq. 20)</span></h2>
+        </div>
+        <div class="plot plot-energy" id="plot-energy"></div>
+      </section>
+
+      <div class="two-col">
+        <section class="panel plot-panel">
+          <div class="panel-head">
+            <h2 class="panel-title">Gain mask G(k, m) <span class="muted small">0 = removed · 1 = kept · Eq. 8</span></h2>
+          </div>
+          <div class="plot plot-gain" id="plot-gain"></div>
+        </section>
+
+        <section class="panel plot-panel" id="inspector">
+          <div class="panel-head">
+            <h2 class="panel-title">STFT frame inspector</h2>
+            <div class="insp-nav">
+              <button class="btn btn-ghost btn-sm" id="insp-prev" type="button" title="Previous frame (,)" disabled>◀</button>
+              <span class="mono small" id="insp-label">—</span>
+              <button class="btn btn-ghost btn-sm" id="insp-next" type="button" title="Next frame (.)" disabled>▶</button>
+            </div>
+          </div>
+          <div class="legend legend-block insp-legend">
+            <span><i class="sw noisy"></i>|Y| noisy</span>
+            <span><i class="sw noise dash"></i><span id="insp-l-sub">α^(1/p)·|N̂| subtracted</span></span>
+            <span><i class="sw noise dot"></i><span id="insp-l-floor">floor β^(1/p)·|N̂|</span></span>
+            <span><i class="sw clean"></i>|S̃| = G·|Y|</span>
+          </div>
+          <div class="plot plot-insp" id="plot-insp"></div>
+          <p class="hint" id="insp-hint">Click any time plot to inspect that frame. Where the amber |Y| falls below the dashed magenta line, Eq. 7 clamps the bin to the dotted floor. Isolated survivors above the line are the source of “musical noise”.</p>
+        </section>
+      </div>
     </section>
 
     <!-- ============ RIGHT: metrics ============ -->
@@ -137,6 +209,12 @@
       <section class="panel">
         <h2 class="panel-title">Metrics</h2>
         <div id="metrics"><p class="muted">Metrics appear after processing.</p></div>
+      </section>
+
+      <section class="panel">
+        <h2 class="panel-title">Noise estimate &amp; spectra</h2>
+        <div class="legend legend-block"><i class="sw noise"></i>|N̂| (<span id="noise-mode-label">initial</span>) <i class="sw noisy"></i>mean noisy <i class="sw clean"></i>mean cleaned</div>
+        <div class="plot plot-spectra" id="plot-spectra"></div>
       </section>
     </aside>
   </main>
