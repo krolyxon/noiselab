@@ -53,6 +53,21 @@ Why the overlap-add is done this way: with 50 % overlap, each 512-sample IFFT fr
 
 ## 3. How to run
 
+### Quickest: one command (also works in MATLAB Online)
+
+1. Upload this `simulink/` folder and a noisy WAV renamed to `noisy.wav` into the same folder. Make the WAV in the web app's demo mode, or with the Python one-liner below.
+2. In the MATLAB command window, `cd` into the folder and run `nl_run_all`.
+3. Read the four steps it prints:
+   - `[1/4]` the plain-MATLAB reference, which writes `cleaned_reference.wav` and needs no Simulink;
+   - `[2/4]` building the model;
+   - `[3/4]` simulating it, which writes `cleaned_simulink.wav`;
+   - `[4/4]` the SNR between the Simulink output and the reference.
+4. Download `cleaned_simulink.wav` and run the comparison script on your own machine (below).
+
+MATLAB Online has no sound card, so `nl_run_all` leaves out the audio-device block. Run `ver` to check that your licence includes Simulink and the DSP System Toolbox. If it doesn't, the script stops after step 1.
+
+### Step by step
+
 In MATLAB, from the repository root:
 
 ```matlab
@@ -91,6 +106,7 @@ Set the solver to **Fixed-step / discrete** and the stop time to `nl_stopTime`.
 
 | File | Purpose |
 |---|---|
+| `nl_run_all.m` | **Start here.** Runs the reference, the build, the simulation and an in-MATLAB check, in that order (UNTESTED) |
 | `build_spectral_subtraction_model.m` | Builds and saves the model with `new_system / add_block / add_line` (UNTESTED) |
 | `run_and_export.m` | Runs the model on a WAV, removes the latency, writes `cleaned_simulink.wav` (UNTESTED) |
 | `nl_default_config.m` | All parameters, identical to the "Match Simulink basic" preset |
