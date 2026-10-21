@@ -39,7 +39,7 @@ def test_accepts_bounds_and_int_for_float():
 def test_presets_are_complete_and_valid():
     assert {"match_simulink_basic", "faithful_light", "balanced", "aggressive", "mains_hum_50", "fan_ac"} <= set(PRESETS)
     for pr in PRESETS.values():
-        assert set(pr["params"]) == set(SCHEMA)
+        assert set(pr["params"]) == set(SCHEMA) | {"algo_params"}
         validate(pr["params"])
 
 

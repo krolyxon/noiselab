@@ -283,3 +283,56 @@ def test_noise_profile_spectrum_for_live_preview(client):
     assert client.get(f"/api/noise-profile/{pid}/spectrum?sr=48000&n_fft=500").status_code == 400
     assert client.get(f"/api/noise-profile/{pid}/spectrum?n_fft=512").status_code == 400
     assert client.get(f"/api/noise-profile/{'c' * 32}/spectrum?sr=48000").status_code == 404
+
+
+# --- §14 algorithm registry ---------------------------------------------------------------
+
+def test_algorithms_endpoint(client):
+    r = client.get("/api/algorithms")
+    assert r.status_code == 200
+    j = r.get_json()
+    ids = [a["id"] for a in j["algorithms"]]
+    assert j["default"] == "spectral_subtraction" and "omlsa" in ids
+    for a in j["algorithms"]:
+        assert {"id", "name", "family", "available", "reason", "schema", "hand_written"} <= set(a)
+    assert set(client.get("/api/health").get_json()["algorithms"]) == set(ids)
+
+
+@pytest.mark.parametrize("algo", ["wiener_dd", "mmse_stsa", "log_mmse", "omlsa"])
+def test_process_with_statistical_algorithm(client, demo_wav, algo):
+    r = _upload(client, demo_wav, {"algorithm": algo, "overlap": 0.75})
+    assert r.status_code == 200, r.get_json()
+    j = r.get_json()
+    assert EXPECTED_KEYS <= set(j)
+    assert j["algorithm"]["id"] == algo and j["algorithm"]["explicit_gain"] is True
+    algos = {a["id"]: a for a in client.get("/api/algorithms").get_json()["algorithms"]}
+    assert j["params"]["algo_params"] == {k: v["default"] for k, v in algos[algo]["schema"].items()}
+    # Frame inspector works and labels the curves for this algorithm.
+    f = client.get(f"/api/frame/{j['job_id']}?t=2.0")
+    assert f.status_code == 200, f.get_json()
+    fj = f.get_json()
+    assert fj["algorithm"] == algo and fj["noise_label"] and len(fj["floor_db"]) == len(fj["f"])
+
+
+def test_reprocess_switches_algorithm_and_attenuation_limit(client, demo_wav):
+    j = _upload(client, demo_wav).get_json()
+    r1 = client.post(f"/api/reprocess/{j['job_id']}", json={"params": {"algorithm": "omlsa", "overlap": 0.75}})
+    r2 = client.post(f"/api/reprocess/{j['job_id']}",
+                     json={"params": {"algorithm": "omlsa", "overlap": 0.75, "atten_limit_db": 6.0}})
+    assert r1.status_code == r2.status_code == 200
+    assert r1.get_json()["algorithm"]["id"] == "omlsa"
+    m1, m2 = r1.get_json()["metrics"], r2.get_json()["metrics"]
+    assert m2["noise_reduction_db"] < m1["noise_reduction_db"]
+    assert m2["noise_reduction_db"] <= 6.0 + 0.5
+
+
+def test_process_rejects_bad_algo_params(client, demo_wav):
+    r = _upload(client, demo_wav, {"algorithm": "omlsa", "algo_params": {"g_min_db": 0}})
+    assert r.status_code == 400 and "g_min_db" in r.get_json()["error"]
+
+
+def test_sweep_rejects_non_ss_algorithm(client):
+    j = client.post("/api/demo", json={"noise_type": "white", "snr_db": 5, "duration": 3,
+                                       "params": {"algorithm": "log_mmse"}}).get_json()
+    r = client.post(f"/api/sweep/{j['job_id']}", json={"params": {"algorithm": "log_mmse"}})
+    assert r.status_code == 422

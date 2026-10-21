@@ -178,3 +178,95 @@ If the mixture's peak exceeds 0.9, clean, noise and mixture are all scaled by th
 Verification:
 - `tests/test_js_parity.py` runs `ss_core.js` under Node. It matches the Python pipeline to < 10⁻⁹ for N = 256, 512, 1024 and p = 1, 2, after the one-hop latency, including the live-learning path.
 - A headless-Chrome check rendered a demo clip through the real `live-worklet.js` in an `OfflineAudioContext`. It matched Python at **93.8 dB SNR between outputs** (max difference 9.6 × 10⁻⁶, float32 audio buffers), with a measured latency of exactly N samples.
+
+---
+
+## 12. Statistical estimators (comparison bench, §14 of CLAUDE.md)
+
+These four methods are **hand-written extensions** in `app/dsp/statistical.py`. They are not part of the Simulink model. They keep every block of the chain above (framing, window, FFT, noisy phase, overlap-add, output stage) and change **only the gain rule** of Eq. (8). Spectral subtraction treats the noise estimate as a fixed amount to remove. These methods treat speech and noise as zero-mean complex Gaussian random variables and pick the gain that minimises an expected error.
+
+References:
+- Y. Ephraim, D. Malah, "Speech enhancement using a minimum mean-square error short-time spectral amplitude estimator," *IEEE Trans. ASSP*, 32(6), 1984.
+- Y. Ephraim, D. Malah, "… log-spectral amplitude estimator," *IEEE Trans. ASSP*, 33(2), 1985.
+- P. Scalart, J. Vieira Filho, "Speech enhancement based on a priori signal to noise estimation," *Proc. ICASSP*, 1996.
+- I. Cohen, B. Berdugo, "Speech enhancement for non-stationary noise environments," *Signal Processing*, 81(11), 2001 (OM-LSA).
+- I. Cohen, "Noise spectrum estimation in adverse environments: improved minima controlled recursive averaging," *IEEE Trans. SAP*, 11(5), 2003 (IMCRA).
+- P. C. Loizou, *Speech Enhancement: Theory and Practice*, 2nd ed., CRC Press, 2013, chapters 7–9 (textbook treatment of all of the above).
+
+### 12.1 Noise power and the two SNRs
+
+The noise modes of §3 return a mean **magnitude** |N̂_k|. The estimators need the noise **variance** λ_d. A complex-Gaussian noise bin has a Rayleigh magnitude, so:
+
+$$\lambda_{d,k} = \frac{4}{\pi}\,|\hat N_k|^2 \tag{22}$$
+
+Then, per bin k and frame m:
+
+$$\gamma_k(m) = \frac{|Y_k(m)|^2}{\lambda_{d,k}}\qquad\text{(a-posteriori SNR)} \tag{23}$$
+
+$$\xi_k(m) = \max\!\Big(\alpha_{dd}\,G_k^2(m-1)\,\gamma_k(m-1) + (1-\alpha_{dd})\max\big(\gamma_k(m)-1,\,0\big),\;\xi_\min\Big)\qquad\text{(a-priori SNR, decision-directed)} \tag{24}$$
+
+The first term of Eq. (24) is the previous frame's clean-speech estimate |Ŝ(m−1)|²/λ_d. With α_dd ≈ 0.98 it dominates, so ξ changes slowly in noise-only regions. A random peak in |Y| does not create an isolated high-gain bin. **This is the main reason these methods produce much less musical noise than Eq. (7)**, where an isolated peak passes straight through. ξ_min (default −25 dB) limits how far ξ can fall. A smaller ξ_min removes more noise but brings back artefacts. In the first frame there is no previous estimate, so ξ = max(γ − 1, ξ_min).
+
+### 12.2 Gain rules
+
+With v = ξγ / (1 + ξ):
+
+$$G_{\text{Wiener}} = \frac{\xi}{1+\xi} \tag{25}$$
+
+$$G_{\text{STSA}} = \frac{\sqrt{\pi}}{2}\,\frac{\sqrt{v}}{\gamma}\,e^{-v/2}\Big[(1+v)\,I_0\!\big(\tfrac v2\big) + v\,I_1\!\big(\tfrac v2\big)\Big] \tag{26}$$
+
+$$G_{\text{LSA}} = \frac{\xi}{1+\xi}\,\exp\!\Big(\tfrac12\,E_1(v)\Big),\qquad E_1(v)=\int_v^\infty \frac{e^{-t}}{t}\,dt \tag{27}$$
+
+- I₀, I₁ are modified Bessel functions. The code uses the scaled forms `i0e`/`i1e` (= e^{−x}·Iₙ(x)), so the product e^{−v/2}·Iₙ(v/2) never overflows.
+- Eq. (26) minimises E[(|S| − |Ŝ|)²]. Eq. (27) minimises E[(log|S| − log|Ŝ|)²], which is closer to how loudness is perceived and attenuates low-SNR bins slightly more.
+- At high SNR (v → ∞) both tend to the Wiener gain (unit test).
+- Every gain is clipped to [G_min, 1], with G_min = `gain_floor_db` (default −40 dB).
+
+### 12.3 OM-LSA with IMCRA noise tracking
+
+The methods above use a **fixed** noise estimate. OM-LSA also estimates, per bin and frame, the probability p that speech is present, and it updates the noise estimate whenever speech is probably absent.
+
+$$G_{\text{OM-LSA}} = G_{\text{LSA}}^{\,p}\;G_\min^{\,1-p} \tag{28}$$
+
+$$p = \Big[1 + \frac{q}{1-q}\,(1+\xi)\,e^{-v}\Big]^{-1} \tag{29}$$
+
+Here q is the a-priori speech-*absence* probability, estimated by IMCRA:
+
+1. **Smoothing and minimum tracking.** S_f(k) = Σᵢ b(i)·|Y(k−i)|², with b = [¼, ½, ¼]. Then S(m) = α_s S(m−1) + (1−α_s) S_f(m), α_s = 0.9. S_min is the minimum of S over a window of U = 8 sub-windows of V frames (`tracking_window_s` ≈ 1 s):
+
+$$S_k(m) = \alpha_s S_k(m-1) + (1-\alpha_s) \sum_i b(i)\,|Y_{k-i}(m)|^2 \tag{30}$$
+
+2. **Rough VAD.** A bin is treated as noise if γ_min = |Y|²/(B_min S_min) < γ₀ = 4.6 and ζ = S/(B_min S_min) < ζ₀ = 1.67, with B_min = 1.66:
+
+$$I_k(m) = \big[\gamma_{\min,k}(m) < \gamma_0\big]\wedge\big[\zeta_k(m) < \zeta_0\big] \tag{31}$$
+
+3. **Second iteration.** The same smoothing and minimum search are repeated using only the bins with I = 1, giving S̃_min. This keeps strong speech out of the minimum. Then:
+
+$$q_k(m) = \begin{cases}1, & \tilde\gamma_{\min} \le 1,\ \tilde\zeta < \zeta_0\\[2pt] \dfrac{\gamma_1 - \tilde\gamma_{\min}}{\gamma_1 - 1}, & 1 < \tilde\gamma_{\min} < \gamma_1,\ \tilde\zeta < \zeta_0\\[4pt] 0, & \text{otherwise}\end{cases}\qquad \gamma_1 = 3 \tag{32}$$
+
+   The code caps q at 0.99 so that p > 0 and the noise update in Eq. (33) never stops completely.
+
+4. **Noise update.** The update is fast where speech is absent and frozen where it is present:
+
+$$\tilde\alpha_d = \alpha_d + (1-\alpha_d)\,p,\qquad \tilde\lambda_d(m+1) = \tilde\alpha_d\,\tilde\lambda_d(m) + (1-\tilde\alpha_d)\,|Y(m)|^2,\qquad \lambda_d = \beta\,\tilde\lambda_d \tag{33}$$
+
+   Here α_d = 0.85 and β = 1.47, a bias correction. The selected noise mode (§3) only initialises λ_d through Eq. (22). The unit test steps the noise level by +10 dB mid-clip, and IMCRA re-tracks it to within ±2 dB.
+
+Constants are Cohen's (2003, Table I). Only V is derived from the hop, so the search window stays about `tracking_window_s` long at any N and overlap. The trade-off is in the window length. A short window follows changing noise faster, but it can mistake a long sustained vowel for noise.
+
+### 12.4 Attenuation limit (all algorithms)
+
+$$\hat s'[n] = \ell\,y[n] + (1-\ell)\,\hat s[n],\qquad \ell = 10^{-L/20} \tag{34}$$
+
+No bin can be attenuated by more than L dB. For gain-based methods this is exactly G' = ℓ + (1 − ℓ)G, because the STFT is linear. DeepFilterNet's `atten_lim_db` uses the same rule. Applying it to **every** algorithm makes it possible to compare methods at equal maximum suppression. L = 100 dB means "off" (ℓ = 0), and the default reproduces each method unchanged.
+
+### 12.5 First check (6 s synthetic demo, N = 512, 50 % overlap, seed 0)
+
+| ΔSI-SDR (dB) | SS (α=2, β=0.02, p=2) | Wiener-DD | MMSE-STSA | Log-MMSE | OM-LSA |
+|---|---|---|---|---|---|
+| white, 5 dB | +6.1 | +11.2 | +10.3 | +11.0 | +10.9 |
+| pink, 5 dB | +4.2 | +7.4 | +6.6 | +7.2 | +4.8 |
+| babble, 5 dB | +4.7 | +9.3 | +8.8 | +9.2 | +8.4 |
+| fan, 5 dB | +4.0 | +3.7 | +4.7 | +4.2 | +5.4 |
+
+These numbers come from one seed on the synthetic voiced signal. They are a sanity check, not the evaluation. The report should use the benchmark in `scripts/benchmark.py`: real speech, many seeds, confidence intervals.

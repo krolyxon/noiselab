@@ -22,6 +22,7 @@ from . import __version__
 from .dsp import synth
 from .dsp.noise_estimation import estimate_profile
 from .dsp.stft import StftConfig
+from .enhancers import registry
 from .params import PRESETS, SCHEMA, ParamError, schema_json, validate
 from .services import processing
 from .services.audio_io import AudioError, load_audio, supported_formats
@@ -159,7 +160,14 @@ def health():
                 "max_duration_s": cfg["MAX_DURATION_S"], "max_sample_rate": cfg["MAX_SAMPLE_RATE"],
                 "job_ttl_s": cfg["JOB_TTL_S"]},
         noise_types=list(synth.NOISE_TYPES),
+        algorithms={a["id"]: {"available": a["available"], "reason": a["reason"]}
+                    for a in registry.algorithms_json()},
     )
+
+
+@bp.get("/api/algorithms")
+def algorithms():
+    return jsonify(algorithms=registry.algorithms_json(), default=registry.DEFAULT_ALGORITHM)
 
 
 @bp.get("/api/presets")

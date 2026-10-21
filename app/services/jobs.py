@@ -45,6 +45,9 @@ class Job:
     version: int = 0
     _stft: dict[tuple, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict, repr=False)
     last: dict[str, Any] = field(default_factory=dict, repr=False)   # latest params/result
+    # Enhancer outputs keyed by the parameters that produce them, so slow models (DNNs)
+    # are not re-run when only the attenuation limit / output gain changes (§14).
+    results: OrderedDict[str, Any] = field(default_factory=OrderedDict, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -59,6 +62,13 @@ class Job:
             spec = stft(self.y, cfg)
             self._stft[cfg.key] = (spec, np.abs(spec))
         return self._stft[cfg.key]
+
+
+    def remember_result(self, key: str, value: Any, keep: int = 8) -> None:
+        self.results[key] = value
+        self.results.move_to_end(key)
+        while len(self.results) > keep:
+            self.results.popitem(last=False)
 
 
 @dataclass

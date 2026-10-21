@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -11,9 +12,11 @@ from scipy.signal import resample_poly
 from ..dsp import metrics as M
 from ..dsp import viz_data as V
 from ..dsp.noise_estimation import estimate_initial, estimate_minstats, estimate_profile, estimate_region
-from ..dsp.spectral_subtraction import compute_gain, denoise, subtracted_magnitude
-from ..dsp.stft import istft
+from ..dsp.spectral_subtraction import compute_gain, output_stage, subtracted_magnitude
+from ..dsp.stft import istft, stft
 from ..dsp.stft import StftConfig, analysis_window, frame_times
+from ..enhancers import registry
+from ..enhancers.base import EnhanceContext, EnhanceResult, apply_attenuation_limit, attenuation_limit
 from ..params import Params, validate
 from .audio_io import write_wav
 from .jobs import Job, NoiseProfile
@@ -21,6 +24,13 @@ from .jobs import Job, NoiseProfile
 
 class ProcessingError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class _Out:
+    cleaned: np.ndarray          # after output stage (Eq. 14)
+    cleaned_raw: np.ndarray      # before output stage (used for y − ŝ and all metrics)
+    gain: np.ndarray             # explicit or effective G(k, m)
 
 
 def _round(x: float | None, nd: int = 2) -> float | None:
@@ -68,12 +78,62 @@ def noise_floor_dbfs(noise_mag: np.ndarray, cfg: StftConfig) -> float:
     return float(M.to_db(two_sided / (cfg.n_fft * np.sum(w**2))))
 
 
+_GAIN_CAP = 10.0      # effective masks are |Ŝ|/|Y|; cap where |Y| ≈ 0 so plots stay readable
+
+
+def effective_gain(cleaned: np.ndarray, mag: np.ndarray, cfg: StftConfig) -> np.ndarray:
+    """|STFT(ŝ)| / |Y| on the analysis grid, for models that do not expose a gain (§14)."""
+    return np.minimum(np.abs(stft(cleaned, cfg)) / np.maximum(mag, 1e-12), _GAIN_CAP)
+
+
+def _cache_key(p: Params) -> str:
+    """Everything that changes the enhancer's output (not the attenuation limit / output gain)."""
+    d = p.to_dict()
+    for k in ("atten_limit_db", "output_gain_db"):
+        d.pop(k)
+    return repr(sorted(d.items()))
+
+
+def enhance(job: Job, p: Params, profile: NoiseProfile | None = None
+            ) -> tuple[EnhanceResult, np.ndarray, bool]:
+    """Run the selected algorithm (cached per job), then the attenuation limit (Eq. 34).
+
+    Returns (result with an explicit or effective gain, noise_mag, gain_is_explicit).
+    """
+    cfg = p.stft
+    spec, mag = job.spectrum(cfg)
+    noise_mag = estimate_noise(job, p, mag, profile)
+    ok, reason = registry.availability(p.algorithm)
+    if not ok:
+        raise ProcessingError(f"{registry.spec(p.algorithm).name} is not available: {reason}")
+    key = _cache_key(p)
+    hit = job.results.get(key)
+    if hit is None:
+        ctx = EnhanceContext(y=job.y, sr=job.sr, cfg=cfg, spec=spec, mag=mag, noise_mag=noise_mag)
+        try:
+            res = registry.get(p.algorithm).process(ctx, p)
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise ProcessingError(f"{registry.spec(p.algorithm).name} failed: {exc}") from exc
+        if not np.all(np.isfinite(res.cleaned)) or len(res.cleaned) != len(job.y):
+            raise ProcessingError(f"{registry.spec(p.algorithm).name} returned an invalid signal")
+        explicit = res.gain is not None
+        if not explicit:
+            res.gain = effective_gain(res.cleaned, mag, cfg)
+        hit = (res, explicit)
+        job.remember_result(key, hit)
+    res, explicit = hit
+    cleaned, gain = apply_attenuation_limit(job.y, res.cleaned, res.gain, p.atten_limit_db)
+    out = EnhanceResult(cleaned=cleaned, gain=gain, noise_power=res.noise_power, extra=res.extra)
+    return out, noise_mag, explicit
+
+
 def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, Any]:
     t_start = time.perf_counter()
     cfg = p.stft
     spec, mag = job.spectrum(cfg)
-    noise_mag = estimate_noise(job, p, mag, profile)
-    res = denoise(job.y, noise_mag, cfg, p.subtraction, p.output_gain_db, spec=spec)
+    enh, noise_mag, explicit_gain = enhance(job, p, profile)
+    cleaned_raw = enh.cleaned
+    res = _Out(cleaned=output_stage(cleaned_raw, p.output_gain_db), cleaned_raw=cleaned_raw, gain=enh.gain)
     removed = job.y - res.cleaned_raw                    # what the algorithm took away (before output gain)
     t_dsp = time.perf_counter() - t_start
 
@@ -116,6 +176,9 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
             "f": np.round(np.fft.rfftfreq(cfg.n_fft, 1 / job.sr), 2).tolist(),
             "noise_profile_db": np.round(V.mag_db(noise_mag, cfg), 1).tolist(),
             "alpha_noise_db": np.round(V.mag_db(_subtracted_level(p) * noise_mag, cfg), 1).tolist(),
+            "noise_tracked_db": (None if enh.noise_power is None else
+                                 np.round(V.mag_db(np.sqrt(np.pi / 4 * enh.noise_power.mean(axis=0)), cfg),
+                                          1).tolist()),
             "noisy_db": np.round(V.mean_spectrum_db(mag, cfg), 1).tolist(),
             "cleaned_db": np.round(V.mean_spectrum_db(mag_clean, cfg), 1).tolist(),
         },
@@ -131,7 +194,8 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
     write_wav(job.dir / "noise.wav", removed, job.sr)
     if job.version == 1 and job.clean is not None:
         write_wav(job.dir / "clean.wav", job.clean, job.sr)
-    job.last = {"params": p, "noise_mag": noise_mag, "gain": res.gain}
+    job.last = {"params": p, "noise_mag": noise_mag, "gain": res.gain, "explicit_gain": explicit_gain,
+                "noise_power": enh.noise_power}
 
     elapsed = time.perf_counter() - t_start
     m = {
@@ -154,6 +218,8 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
     return {
         "job_id": job.id, "name": job.name, "sr": job.sr, "duration": _round(job.duration, 3),
         "version": job.version, "params": p.to_dict(), "metrics": m, "viz": viz,
+        "algorithm": {"id": p.algorithm, "name": registry.spec(p.algorithm).name,
+                      "family": registry.spec(p.algorithm).family, "explicit_gain": explicit_gain},
         "demo": job.demo,
         "audio": audio,
     }
@@ -164,12 +230,33 @@ def _subtracted_level(p: Params) -> float:
 
     Spectral subtraction removes α·|N̂|^p, i.e. a magnitude of α^(1/p)·|N̂| (Eq. 7).
     The Wiener gain (Eq. 9) reaches zero where |Y|² = α·|N̂|², i.e. |Y| = √α·|N̂|.
+    Other algorithms do not subtract a scaled estimate, so |N̂| itself is shown.
     """
+    if p.algorithm != "spectral_subtraction":
+        return 1.0
     return p.alpha ** 0.5 if p.method == "wiener" else p.alpha ** (1.0 / p.exponent)
 
 
+def _inspector_floor(p: Params, y: np.ndarray, noise: np.ndarray) -> tuple[np.ndarray | None, str]:
+    """The lowest |S̃| the algorithm can output in this frame, and its label."""
+    lim = attenuation_limit(p.atten_limit_db)
+    if p.algorithm == "spectral_subtraction":
+        if p.method == "wiener":
+            return p.beta * y, "floor β·|Y|"                    # Eq. (9): G ≥ β  ⇒  |S̃| ≥ β·|Y|
+        floor = subtracted_magnitude(np.zeros((1, len(noise))), noise, 0.0, p.beta, p.exponent)[0]
+        return floor, "floor β^(1/p)·|N̂|"                       # Eq. (7)
+    a = p.algo_params
+    if "gain_floor_db" in a or "g_min_db" in a:
+        g_db = a.get("gain_floor_db", a.get("g_min_db"))
+        g = max(10.0 ** (g_db / 20.0), lim)
+        return g * y, f"floor G_min·|Y| ({20 * np.log10(g):.0f} dB)"
+    if lim > 0:
+        return lim * y, f"attenuation limit ({p.atten_limit_db:.0f} dB)"
+    return None, ""
+
+
 def inspect_frame(job: Job, t: float) -> dict[str, Any]:
-    """STFT frame inspector: |Y|, α|N̂| and |S̃| for the frame nearest to time t (all in dBFS)."""
+    """STFT frame inspector: |Y|, the noise estimate and |S̃| for the frame nearest to time t (dBFS)."""
     if not job.last:
         raise ProcessingError("job has not been processed yet")
     p: Params = job.last["params"]
@@ -179,20 +266,28 @@ def inspect_frame(job: Job, t: float) -> dict[str, Any]:
     m = int(np.argmin(np.abs(times - t)))
     y = mag[m]
     noise = job.last["noise_mag"]
+    if job.last.get("noise_power") is not None:              # tracked noise (OM-LSA / IMCRA)
+        noise = np.sqrt(np.pi / 4.0 * job.last["noise_power"][m])   # Eq. (22) inverted
     gain = job.last["gain"][m]
-    if p.method == "wiener":
-        floor = p.beta * y                                  # Eq. (9): G ≥ β  ⇒  |S̃| ≥ β·|Y|
+    floor, floor_label = _inspector_floor(p, y, noise)
+    if p.algorithm == "spectral_subtraction":
+        noise_label = ("√α·|N̂| (G = 0 below)" if p.method == "wiener"
+                       else f"α^(1/p)·|N̂| subtracted (p = {p.exponent})")
+    elif job.last.get("noise_power") is not None:
+        noise_label = "|N̂| tracked (IMCRA), this frame"
     else:
-        floor = subtracted_magnitude(np.zeros((1, len(noise))), noise, 0.0, p.beta, p.exponent)[0]  # β^(1/p)|N̂|
+        noise_label = "|N̂| estimate (reference)"
     return {
         "frame": m, "t": _round(float(times[m]), 4), "n_frames": int(mag.shape[0]),
         "f": np.round(np.fft.rfftfreq(cfg.n_fft, 1 / job.sr), 2).tolist(),
         "noisy_db": np.round(V.mag_db(y, cfg), 1).tolist(),
         "alpha_noise_db": np.round(V.mag_db(_subtracted_level(p) * noise, cfg), 1).tolist(),
-        "floor_db": np.round(V.mag_db(floor, cfg), 1).tolist(),
+        "floor_db": None if floor is None else np.round(V.mag_db(floor, cfg), 1).tolist(),
         "cleaned_db": np.round(V.mag_db(gain * y, cfg), 1).tolist(),
         "gain": np.round(np.minimum(gain, 10.0), 4).tolist(),
         "method": p.method, "exponent": p.exponent, "alpha": p.alpha, "beta": p.beta,
+        "algorithm": p.algorithm, "explicit_gain": bool(job.last.get("explicit_gain", True)),
+        "noise_label": noise_label, "floor_label": floor_label,
     }
 
 
@@ -209,6 +304,8 @@ def sweep(job: Job, p: Params, profile: NoiseProfile | None = None,
     """
     if job.clean is None:
         raise ProcessingError("the parameter sweep needs a clean reference — use demo mode")
+    if p.algorithm != "spectral_subtraction":
+        raise ProcessingError("the α × β sweep applies to spectral subtraction only")
     t0 = time.perf_counter()
     cfg = p.stft
     spec, mag = job.spectrum(cfg)

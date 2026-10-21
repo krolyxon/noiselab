@@ -1,36 +1,30 @@
-"""Parameter schema, validation and presets (CLAUDE.md §4 parameter table).
+"""Parameter schema, validation and presets (CLAUDE.md §4 parameter table, §14 algorithms).
 
 Pure Python — no Flask. Invalid input raises ParamError (the API turns it into 400).
 Out-of-range values are *rejected*, not clamped, so the user always knows what ran.
+
+Flat parameters (SCHEMA) are shared by every algorithm: framing, the noise estimate,
+the spectral-subtraction rule, and the output stage. Algorithm-specific parameters live in
+`algo_params` and are validated against that algorithm's own schema (app/enhancers).
 """
 
 from __future__ import annotations
 
-import math
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from .dsp.noise_estimation import NOISE_MODES
 from .dsp.spectral_subtraction import METHODS, SubtractionParams
 from .dsp.stft import WINDOWS, StftConfig
+from .enhancers import registry
+from .schema import ParamError, Spec, coerce, spec_json
 
-
-class ParamError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class Spec:
-    kind: type                       # int, float or str
-    default: Any
-    choices: tuple | None = None     # discrete set, or
-    lo: float | None = None          # continuous range [lo, hi]
-    hi: float | None = None
-    extended: bool = False           # "extended" (beyond the basic Simulink algorithm)
-    help: str = ""
+__all__ = ["DEFAULTS", "PRESETS", "SCHEMA", "ParamError", "Params", "Spec", "schema_json", "validate"]
 
 
 SCHEMA: dict[str, Spec] = {
+    "algorithm": Spec(str, registry.DEFAULT_ALGORITHM, choices=registry.ALGORITHM_IDS,
+                      help="Noise-suppression algorithm (§14). Spectral subtraction is the Simulink algorithm."),
     "n_fft": Spec(int, 512, choices=(256, 512, 1024, 2048),
                   help="Frame length N. Longer = finer frequency resolution, coarser time resolution."),
     "overlap": Spec(float, 0.5, choices=(0.5, 0.75), help="Fraction of each frame shared with the next."),
@@ -49,12 +43,16 @@ SCHEMA: dict[str, Spec] = {
     "method": Spec(str, "spectral_subtraction", choices=METHODS, help="Gain rule."),
     "gain_smooth": Spec(float, 0.0, lo=0.0, hi=0.95, extended=True, help="Time smoothing λ of the gain."),
     "freq_smooth_bins": Spec(int, 0, lo=0, hi=9, extended=True, help="Frequency smoothing width (bins)."),
+    "atten_limit_db": Spec(float, 100.0, lo=3.0, hi=100.0,
+                           help="Maximum attenuation L (dB), the same rule for every algorithm (Eq. 34). "
+                                "100 = off."),
     "output_gain_db": Spec(float, 0.0, lo=-12.0, hi=12.0, help="Output gain (dB) before peak protection."),
 }
 
 
 @dataclass(frozen=True)
 class Params:
+    algorithm: str
     n_fft: int
     overlap: float
     window: str
@@ -70,7 +68,9 @@ class Params:
     method: str
     gain_smooth: float
     freq_smooth_bins: int
+    atten_limit_db: float
     output_gain_db: float
+    algo_params: dict[str, Any] = field(default_factory=dict)   # validated per algorithm
 
     @property
     def stft(self) -> StftConfig:
@@ -85,50 +85,37 @@ class Params:
         return asdict(self)
 
 
-DEFAULTS = Params(**{k: s.default for k, s in SCHEMA.items()})
-
-
-def _coerce(name: str, spec: Spec, value: Any) -> Any:
-    if spec.kind is str:
-        if not isinstance(value, str):
-            raise ParamError(f"{name} must be a string")
-        if spec.choices is not None and value not in spec.choices:
-            raise ParamError(f"{name} must be one of {list(spec.choices)}, got {value!r}")
-        if len(value) > 64:
-            raise ParamError(f"{name} is too long")
-        return value
-
-    # Numbers: accept JSON numbers only (bool is an int subclass in Python — reject it).
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ParamError(f"{name} must be a number")
-    if not math.isfinite(value):
-        raise ParamError(f"{name} must be finite")
-    if spec.kind is int:
-        if float(value) != int(value):
-            raise ParamError(f"{name} must be an integer")
-        value = int(value)
-    else:
-        value = float(value)
-
-    if spec.choices is not None and value not in spec.choices:
-        raise ParamError(f"{name} must be one of {list(spec.choices)}, got {value}")
-    if spec.lo is not None and not (spec.lo <= value <= spec.hi):
-        raise ParamError(f"{name} must be in [{spec.lo}, {spec.hi}], got {value}")
-    return value
+DEFAULTS = Params(**{k: s.default for k, s in SCHEMA.items()},
+                  algo_params=registry.spec(registry.DEFAULT_ALGORITHM).defaults())
 
 
 def validate(raw: dict[str, Any] | None, base: Params = DEFAULTS) -> Params:
-    """Validate a (partial) parameter dict on top of `base`. Unknown keys are an error."""
+    """Validate a (partial) parameter dict on top of `base`. Unknown keys are an error.
+
+    `algo_params` is merged on top of the algorithm's current values. If `algorithm`
+    changes, the new algorithm starts from its own defaults.
+    """
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise ParamError("params must be a JSON object")
-    unknown = set(raw) - set(SCHEMA)
+    unknown = set(raw) - set(SCHEMA) - {"algo_params"}
     if unknown:
         raise ParamError(f"unknown parameter(s): {', '.join(sorted(unknown))}")
 
-    values = {k: _coerce(k, SCHEMA[k], v) for k, v in raw.items()}
+    values = {k: coerce(k, SCHEMA[k], v) for k, v in raw.items() if k != "algo_params"}
     p = replace(base, **values)
+
+    spec = registry.spec(p.algorithm)
+    algo = dict(base.algo_params) if p.algorithm == base.algorithm else spec.defaults()
+    extra = raw.get("algo_params", {})
+    if not isinstance(extra, dict):
+        raise ParamError("algo_params must be a JSON object")
+    bad = set(extra) - set(spec.schema)
+    if bad:
+        raise ParamError(f"unknown parameter(s) for {p.algorithm}: {', '.join(sorted(bad))}")
+    algo.update({k: coerce(f"{p.algorithm}.{k}", spec.schema[k], v) for k, v in extra.items()})
+    p = replace(p, algo_params=algo)
 
     if p.noise_mode == "region" and not p.region_end > p.region_start:
         raise ParamError("region_end must be greater than region_start")
@@ -138,16 +125,7 @@ def validate(raw: dict[str, Any] | None, base: Params = DEFAULTS) -> Params:
 
 
 def schema_json() -> dict[str, dict[str, Any]]:
-    out = {}
-    for k, s in SCHEMA.items():
-        d: dict[str, Any] = {"type": s.kind.__name__, "default": s.default, "extended": s.extended,
-                             "help": s.help}
-        if s.choices is not None:
-            d["choices"] = list(s.choices)
-        if s.lo is not None:
-            d["min"], d["max"] = s.lo, s.hi
-        out[k] = d
-    return out
+    return {k: spec_json(s) for k, s in SCHEMA.items()}
 
 
 # --- Presets -------------------------------------------------------------------------------
@@ -180,6 +158,20 @@ _PRESETS: list[tuple[str, str, str, dict[str, Any]]] = [
      "light time smoothing.",
      {"n_fft": 1024, "overlap": 0.75, "alpha": 4.0, "beta": 0.02, "gain_smooth": 0.3,
       "freq_smooth_bins": 0}),
+    # --- §14 comparison bench: one default preset per hand-written statistical method ---------
+    ("wiener_dd_default", "Wiener (decision-directed)",
+     "Wiener gain with a decision-directed a-priori SNR (Eq. 24–25). 75 % overlap, α_dd = 0.98.",
+     {"algorithm": "wiener_dd", "overlap": 0.75}),
+    ("mmse_stsa_default", "MMSE-STSA",
+     "Ephraim–Malah spectral-amplitude estimator (Eq. 26). 75 % overlap, α_dd = 0.98.",
+     {"algorithm": "mmse_stsa", "overlap": 0.75}),
+    ("log_mmse_default", "Log-MMSE",
+     "Ephraim–Malah log-spectral-amplitude estimator (Eq. 27). 75 % overlap, α_dd = 0.98.",
+     {"algorithm": "log_mmse", "overlap": 0.75}),
+    ("omlsa_default", "OM-LSA + IMCRA",
+     "Speech-presence-weighted log-MMSE with adaptive noise tracking (Eq. 28–33), Cohen's settings: "
+     "75 % overlap (8 ms hop at 16 kHz), G_min = −25 dB.",
+     {"algorithm": "omlsa", "overlap": 0.75}),
 ]
 
 PRESETS: dict[str, dict[str, Any]] = {
