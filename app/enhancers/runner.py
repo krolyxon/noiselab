@@ -13,7 +13,7 @@ from ..dsp.noise_estimation import estimate_initial, estimate_minstats, estimate
 from ..dsp.stft import stft
 from ..params import Params
 from . import registry
-from .base import EnhanceContext, apply_attenuation_limit
+from .base import EnhanceContext, apply_attenuation_limit, warm
 
 
 def noise_estimate(y: np.ndarray, sr: int, p: Params, mag: np.ndarray) -> np.ndarray:
@@ -24,6 +24,11 @@ def noise_estimate(y: np.ndarray, sr: int, p: Params, mag: np.ndarray) -> np.nda
     if p.noise_mode == "minstats":
         return estimate_minstats(mag, p.minstats_percentile)
     raise ValueError("runner supports noise modes initial, region and minstats")
+
+
+def prepare(p: Params) -> None:
+    """Load the algorithm's model now (so a caller's timer measures inference only)."""
+    warm(registry.get(p.algorithm), p)
 
 
 def enhance_signal(y: np.ndarray, sr: int, p: Params) -> np.ndarray:

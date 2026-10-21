@@ -2,12 +2,12 @@
 // App wiring: upload → process → plots/metrics/player; parameter changes → debounced reprocess.
 
 import { Controls } from "./controls.js";
-import { renderMetrics } from "./metrics.js";
+import { renderDnsmos, renderMetrics } from "./metrics.js";
 import { ABPlayer } from "./player.js";
-import { colors, drawInspector, drawSpectra, drawSweep, Plots } from "./plots.js";
+import { colors, drawCompare, drawInspector, drawSpectra, drawSweep, familyColor, Plots } from "./plots.js";
 import { LivePreview, liveSupport } from "./live.js";
 import { drawLive, micSupport, Recorder } from "./recorder.js";
-import { $, $$, api, debounce, fmt, postJSON, toast } from "./util.js";
+import { $, $$, api, debounce, el, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
 
 const REPROCESS_DEBOUNCE_MS = 250;
@@ -87,6 +87,11 @@ function showResult(res, { newJob }) {
   inspector.refresh(res, { newJob });
   $("#btn-export").disabled = false;
   sweepUI.onResult(res, { newJob });
+  $("#gain-kind").textContent = res.algorithm?.explicit_gain === false
+    ? "effective mask |STFT(ŝ)| / |Y| (black-box model) · 0 = removed · 1 = kept"
+    : "0 = removed · 1 = kept · Eq. 8";
+  dnsmosUI.onResult(res);
+  compareUI.onResult(res, { newJob });
   const urls = newJob ? res.audio : { cleaned: res.audio.cleaned, noise: res.audio.noise };
   if (newJob) player.reset();
   player.load(urls).catch((e) => toast(e.message, "error"));
@@ -392,6 +397,8 @@ function toggleTheme() {
     plots.update(state.job, { newJob: false });
     drawSpectra($("#plot-spectra"), state.job.viz.spectra);
     if (inspector.frame) drawInspector($("#plot-insp"), inspector.frame);
+    compareUI.render();
+    if (sweepUI.data) drawSweep($("#plot-sweep"), sweepUI.data, sweepUI.metric, state.job.params);
   }
 }
 
@@ -633,6 +640,181 @@ const liveUI = {
 $("#btn-live").addEventListener("click", () => liveUI.toggle());
 for (const b of $$("#live-ab button")) b.addEventListener("click", () => liveUI.setBypass(b.dataset.live === "bypass"));
 
+// ---------------------------------------------------------------------------- DNSMOS (§14, on demand)
+const dnsmosUI = {
+  result: null, busy: false, version: null,
+  available() { return !!state.health?.quality_metrics?.dnsmos; },
+  onResult(res) {
+    if (res.version !== this.version) { this.result = null; this.version = res.version; }
+    this.render();
+  },
+  render() {
+    renderDnsmos($("#dnsmos"), { available: this.available(), result: this.result, busy: this.busy,
+      onRun: () => this.run() });
+  },
+  async run() {
+    if (!state.job || this.busy) return;
+    this.busy = true;
+    this.render();
+    try {
+      const r = await postJSON(`/api/quality/${state.job.job_id}`, {});
+      if (r.version === state.job.version) this.result = r;
+    } catch (e) {
+      toast(`DNSMOS: ${e.message}`, "error");
+    } finally {
+      this.busy = false;
+      this.render();
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------- algorithm comparison (§14)
+const nz = (v) => (v === null || v === undefined ? NaN : v);
+const COMPARE_METRICS = [
+  { id: "si_sdr", label: "ΔSI-SDR (dB)", demo: true, get: (r) => nz(r.ground_truth?.si_sdr_improvement_db),
+    fmt: (v) => fmt(v, 2) },
+  { id: "pesq", label: "PESQ", demo: true, get: (r) => nz(r.ground_truth?.pesq_out), fmt: (v) => fmt(v, 2) },
+  { id: "estoi", label: "ESTOI", demo: true, get: (r) => nz(r.ground_truth?.estoi_out), fmt: (v) => fmt(v, 3) },
+  { id: "lsd", label: "LSD (dB)", demo: true, lowerIsBetter: true, get: (r) => nz(r.ground_truth?.lsd_out_db),
+    fmt: (v) => fmt(v, 2) },
+  { id: "nr", label: "Noise reduction (dB)", get: (r) => nz(r.noise_reduction_db), fmt: (v) => fmt(v, 1) },
+  { id: "sa", label: "Speech atten. (dB)", lowerIsBetter: true, get: (r) => nz(r.speech_attenuation_db),
+    fmt: (v) => fmt(v, 2) },
+  { id: "ovrl", label: "DNSMOS OVRL", get: (r) => nz(r.dnsmos?.output?.ovrl), fmt: (v) => fmt(v, 2) },
+  { id: "rtf", label: "Real-time factor", lowerIsBetter: true, get: (r) => nz(r.real_time_factor),
+    fmt: (v) => fmt(v, 4) },
+];
+
+const compareUI = {
+  rows: [], jobId: null, metric: null, sortKey: null, sortDesc: true, running: false, key: null,
+
+  /** Flat parameters that affect every algorithm; a change makes the comparison stale. */
+  _key(p) {
+    const { algorithm, algo_params, alpha, beta, exponent, method, gain_smooth, freq_smooth_bins, ...flat } = p;
+    return JSON.stringify(flat);
+  },
+
+  metrics() {
+    const demo = !!state.job?.demo;
+    const hasDnsmos = this.rows.some((r) => r.dnsmos);
+    return COMPARE_METRICS.filter((m) => (!m.demo || demo) && (m.id !== "ovrl" || hasDnsmos));
+  },
+
+  onResult(res, { newJob }) {
+    $("#compare-panel").hidden = false;
+    $("#compare-dnsmos").disabled = !dnsmosUI.available();
+    $("#compare-dnsmos").parentElement.title = dnsmosUI.available()
+      ? "DNSMOS P.835: a model-predicted MOS that needs no clean reference (≈ 0.1 s per 9 s of audio per algorithm)"
+      : "DNSMOS not installed (requirements-ml.txt + scripts/fetch_models.py)";
+    if (newJob || res.job_id !== this.jobId) {
+      this.rows = []; this.jobId = res.job_id; this.key = null; this.metric = null;
+      Plotly.purge($("#plot-compare"));
+    }
+    const stale = this.rows.length && this.key !== this._key(res.params);
+    $("#compare-info").textContent = stale
+      ? "Framing / noise / output settings changed since this comparison: press “Compare all” again to update it."
+      : "Framing, noise-estimate, attenuation-limit and output settings from the left apply to all algorithms; " +
+        "each algorithm's own parameters are its defaults. Results are cached, so selecting a row is instant.";
+    $("#plot-compare").style.opacity = stale ? 0.4 : 1;
+    this.render();
+  },
+
+  async run() {
+    if (!state.job || this.running) return;
+    const algos = (state.algorithms || []).filter((a) => a.available);
+    const params = controls.request();
+    const dnsmos = $("#compare-dnsmos").checked && dnsmosUI.available();
+    this.running = true;
+    $("#btn-compare").disabled = true;
+    this.rows = algos.map((a) => ({ algorithm: a.id, name: a.name, family: a.family, pending: true }));
+    this.key = this._key(params);
+    this.render();
+    setBusy(true, "comparing");
+    const jobId = state.job.job_id;
+    try {
+      for (const [i, a] of algos.entries()) {
+        $("#btn-compare").textContent = `${i + 1} / ${algos.length}…`;
+        try {
+          const r = await postJSON(`/api/compare/${jobId}/${a.id}`, { params, dnsmos });
+          if (jobId !== state.job?.job_id) return;
+          this.rows[i] = r;
+        } catch (e) {
+          this.rows[i] = { ...this.rows[i], pending: false, error: e.message };
+        }
+        this.render();
+      }
+    } finally {
+      this.running = false;
+      $("#btn-compare").disabled = false;
+      $("#btn-compare").textContent = "Compare all";
+      setBusy(false);
+      this.onResult(state.job, { newJob: false });
+    }
+  },
+
+  render() {
+    const ms = this.metrics();
+    if (!this.metric || !ms.some((m) => m.id === this.metric)) this.metric = ms[0].id;
+    // metric buttons for the chart
+    const seg = $("#compare-metric");
+    seg.replaceChildren(...ms.filter((m) => m.id !== "rtf").map((m) => el("button", { type: "button", role: "radio",
+      "aria-checked": String(m.id === this.metric), text: m.label.replace(/ \(.*\)$/, ""),
+      onclick: () => { this.metric = m.id; this.render(); } })));
+    const done = this.rows.filter((r) => !r.pending && !r.error);
+    const metric = COMPARE_METRICS.find((m) => m.id === this.metric);
+    if (done.length) drawCompare($("#plot-compare"), done, metric);
+
+    // table
+    const table = $("#compare-table");
+    if (!this.rows.length) { table.replaceChildren(); return; }
+    const head = el("tr", {}, el("th", { text: "Algorithm" }),
+      ...ms.map((m) => el("th", { text: m.label, title: m.lowerIsBetter ? "lower is better" : "higher is better",
+        "aria-sort": this.sortKey === m.id ? (this.sortDesc ? "descending" : "ascending") : null,
+        onclick: () => { this.sortDesc = this.sortKey === m.id ? !this.sortDesc : !m.lowerIsBetter;
+          this.sortKey = m.id; this.render(); } })),
+      el("th", { text: "" }));
+    let rows = [...this.rows];
+    if (this.sortKey) {
+      const m = COMPARE_METRICS.find((x) => x.id === this.sortKey);
+      rows.sort((a, b) => {
+        const va = m.get(a), vb = m.get(b);
+        if (!Number.isFinite(va)) return 1;
+        if (!Number.isFinite(vb)) return -1;
+        return this.sortDesc ? vb - va : va - vb;
+      });
+    }
+    const active = state.job?.params?.algorithm;
+    const body = el("tbody", {}, rows.map((r) => {
+      const cells = ms.map((m) => {
+        const v = r.pending || r.error ? NaN : m.get(r);
+        return el("td", { class: Number.isFinite(v) ? "" : "na",
+          text: r.pending ? "…" : r.error ? "error" : Number.isFinite(v) ? m.fmt(v) : "n/a",
+          title: r.error || null });
+      });
+      const play = r.audio ? el("button", { class: "btn btn-ghost btn-sm play", type: "button", text: "▶",
+        title: `Listen to ${r.name}`, onclick: (e) => { e.stopPropagation(); this.listen(r, e.currentTarget); } }) : null;
+      return el("tr", { class: `${r.algorithm === active ? "active" : ""} ${r.pending ? "pending" : ""}`,
+        title: r.error ? r.error : `Select ${r.name} (all plots and metrics update)`,
+        onclick: () => { if (!r.pending && !r.error) controls.setAlgorithm(r.algorithm); } },
+      el("td", {}, el("span", { class: "fam", style: `background:${familyColor(r.family)}` }), r.name),
+      ...cells, el("td", {}, play));
+    }));
+    table.replaceChildren(el("thead", {}, head), body);
+  },
+
+  listen(r, btn) {
+    const a = $("#compare-audio");
+    player.pause?.();
+    if (a.dataset.src === r.audio && !a.paused) { a.pause(); btn.textContent = "▶"; return; }
+    for (const b of $$("#compare-table .play")) b.textContent = "▶";
+    a.src = r.audio;
+    a.dataset.src = r.audio;
+    a.play().then(() => { btn.textContent = "❚❚"; }).catch((e) => toast(e.message, "error"));
+    a.onended = () => { btn.textContent = "▶"; };
+  },
+};
+$("#btn-compare").addEventListener("click", () => compareUI.run());
+
 // ---------------------------------------------------------------------------- boot
 let controls;
 
@@ -645,12 +827,14 @@ async function boot() {
   $("#btn-theme").addEventListener("click", toggleTheme);
   $("#btn-export").addEventListener("click", exportZip);
   try {
-    const [health, presets] = await Promise.all([api("/api/health"), api("/api/presets")]);
+    const [health, presets, algos] = await Promise.all([api("/api/health"), api("/api/presets"),
+      api("/api/algorithms")]);
     state.health = health;
+    state.algorithms = algos.algorithms;
     $("#formats-hint").textContent = `${health.formats.join(" · ")} · ≤\u00a0${health.limits.max_upload_mb}\u00a0MB · ≤\u00a0${health.limits.max_duration_s}\u00a0s`;
     controls = new Controls({
       container: $("#param-groups"), presetSelect: $("#preset"), presetDesc: $("#preset-desc"),
-      schema: presets.schema, presets: presets.presets,
+      schema: presets.schema, presets: presets.presets, algorithms: algos.algorithms,
       onChange: (v) => { updateRegionOverlay(); reprocess(); liveUI.onParams(v); },
     });
   } catch (e) {

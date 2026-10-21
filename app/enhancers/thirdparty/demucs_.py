@@ -36,6 +36,9 @@ class Demucs:
         native_sr=SR, requires=("denoiser", "torch"),
     )
 
+    def warm(self, p: Params) -> None:
+        load_model(p.algo_params["model"])
+
     def process(self, ctx: EnhanceContext, p: Params) -> EnhanceResult:
         name = p.algo_params["model"]
         return EnhanceResult(cleaned=run_at_rate(ctx.y, ctx.sr, SR, lambda x: _run(x, name)))

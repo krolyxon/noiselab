@@ -167,6 +167,29 @@ def health():
     )
 
 
+@bp.post("/api/compare/<job_id>/<algo>")
+def compare(job_id: str, algo: str):
+    """One algorithm of the Compare panel (§14). Body: {"params": flat params, "dnsmos": bool}.
+
+    The flat parameters (framing, noise mode, attenuation limit, output gain) come from the
+    UI. The algorithm-specific ones are that algorithm's defaults, so every method is compared
+    as shipped. The client calls this once per algorithm, which gives it progress for free.
+    """
+    if algo not in registry.ALGORITHM_IDS:
+        raise APIError(f"unknown algorithm {algo!r}", 404)
+    job = _get_job(job_id)
+    body = _body_json()
+    raw = dict(body.get("params", {}))
+    if not isinstance(raw, dict):
+        raise APIError("params must be a JSON object")
+    raw.pop("algo_params", None)
+    raw["algorithm"] = algo
+    p = validate(raw)
+    profile = _profiles().get(p.profile_id) if p.noise_mode == "profile" and valid_id(p.profile_id) else None
+    with job.lock:
+        return jsonify(processing.compare_one(job, p, profile, dnsmos=bool(body.get("dnsmos", False))))
+
+
 @bp.post("/api/quality/<job_id>")
 def quality(job_id: str):
     """DNSMOS of the input and of the latest output (slow, so it is a separate call)."""
@@ -284,8 +307,9 @@ def sweep(job_id: str):
 
 @bp.get("/api/audio/<job_id>/<kind>.wav")
 def audio(job_id: str, kind: str):
-    if kind not in AUDIO_KINDS:
-        raise APIError(f"audio kind must be one of {list(AUDIO_KINDS)}", 404)
+    compared = kind.startswith("cleaned_") and kind[len("cleaned_"):] in registry.ALGORITHM_IDS
+    if kind not in AUDIO_KINDS and not compared:
+        raise APIError(f"audio kind must be one of {list(AUDIO_KINDS)} or cleaned_<algorithm>", 404)
     job = _get_job(job_id)
     path = job.dir / f"{kind}.wav"
     if not path.is_file():

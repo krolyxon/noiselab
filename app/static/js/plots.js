@@ -34,6 +34,7 @@ export const colors = () => ({
   noisy: css("--noisy"), clean: css("--clean"), noise: css("--noise"), ok: css("--ok"),
   text: css("--text"), muted: css("--muted"), grid: css("--border"), panel: css("--panel"),
 });
+export const familyColor = (fam) => css(`--fam-${fam}`) || css("--muted");
 
 const CONFIG = {
   displaylogo: false, responsive: true, displayModeBar: "hover", scrollZoom: false,
@@ -337,18 +338,20 @@ export function drawSpectra(div, sp) {
 /** STFT frame inspector: |Y|, α|N̂| (what gets subtracted), floor β|N̂| and the result |S̃| = G·|Y|. */
 export function drawInspector(div, fr) {
   const c = colors();
-  const wiener = fr.method === "wiener";
-  const lbl = wiener ? "√α·|N̂| (G = 0 below)" : `α^(1/p)·|N̂| subtracted (p = ${fr.exponent})`;
-  const floorLbl = wiener ? "floor β·|Y|" : "floor β^(1/p)·|N̂|";
+  const lbl = fr.noise_label;
+  const floorLbl = fr.floor_label || "no floor";
+  const gainLbl = fr.explicit_gain === false ? "|S̃| = G_eff·|Y| (effective)" : "|S̃| = G·|Y|";
   document.getElementById("insp-l-sub").textContent = lbl;
   document.getElementById("insp-l-floor").textContent = floorLbl;
+  document.getElementById("insp-l-floor").parentElement.hidden = !fr.floor_db;
+  document.getElementById("insp-l-out").textContent = gainLbl;
   const line = (y, color, name, extra = {}) => ({ x: fr.f, y, type: "scatter", mode: "lines", name,
     line: { color, width: 1.2, ...extra }, hovertemplate: `%{x:.0f} Hz · ${name.split(" ")[0]} %{y:.1f} dBFS<extra></extra>` });
   Plotly.react(div, [
     line(fr.noisy_db, c.noisy, "|Y| noisy"),
     line(fr.alpha_noise_db, c.noise, lbl, { dash: "dash" }),
-    line(fr.floor_db, c.noise, floorLbl, { dash: "dot", width: 1 }),
-    line(fr.cleaned_db, c.clean, "|S̃| = G·|Y|", { width: 1.6 }),
+    ...(fr.floor_db ? [line(fr.floor_db, c.noise, floorLbl, { dash: "dot", width: 1 })] : []),
+    line(fr.cleaned_db, c.clean, gainLbl, { width: 1.6 }),
   ], baseLayout(c, {
     margin: { l: 44, r: 8, t: 6, b: 28 },
     xaxis: axis("frequency (Hz)", c, { range: [0, fr.f[fr.f.length - 1]] }),
@@ -395,5 +398,29 @@ export function drawSweep(div, sw, metric, current) {
     shapes,
     annotations: bi >= 0 && bj >= 0 ? [{ x: bj, y: bi, text: "★", showarrow: false, xshift: 14, yshift: 8,
       font: { size: 13, color: "#000000" } }] : [],   // best cell is always near the yellow end
+  }), { ...CONFIG, displayModeBar: false });
+}
+
+/**
+ * Compare panel (§14): one horizontal bar per algorithm, coloured by family, value printed at
+ * the bar end (so identity never relies on colour alone). Bars are sorted best-first.
+ */
+export function drawCompare(div, rows, metric) {
+  const c = colors();
+  const pts = rows.map((r) => ({ r, v: metric.get(r) })).filter((p) => Number.isFinite(p.v));
+  pts.sort((a, b) => (metric.lowerIsBetter ? a.v - b.v : b.v - a.v));
+  if (!pts.length) { Plotly.purge(div); div.dataset.empty = `No ${metric.label} values for these runs.`; return; }
+  const y = pts.map((p) => p.r.name);
+  Plotly.react(div, [{
+    type: "bar", orientation: "h", x: pts.map((p) => p.v), y,
+    marker: { color: pts.map((p) => familyColor(p.r.family)), line: { width: 0 } },
+    text: pts.map((p) => metric.fmt(p.v)), textposition: "outside", cliponaxis: false,
+    textfont: { family: MONO, size: 10, color: c.text },
+    hovertemplate: `%{y}<br>${metric.label}: %{x:.3f}<extra></extra>`,
+  }], baseLayout(c, {
+    margin: { l: 150, r: 48, t: 4, b: 30 }, bargap: 0.25,
+    xaxis: axis(metric.label + (metric.lowerIsBetter ? "  (lower is better)" : ""), c, { zeroline: true,
+      zerolinecolor: c.muted, fixedrange: true }),
+    yaxis: { autorange: "reversed", tickfont: { family: SANS, size: 10, color: c.text }, fixedrange: true },
   }), { ...CONFIG, displayModeBar: false });
 }

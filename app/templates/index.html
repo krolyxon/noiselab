@@ -207,7 +207,7 @@
       <div class="two-col">
         <section class="panel plot-panel">
           <div class="panel-head">
-            <h2 class="panel-title">Gain mask <span class="math">G(k, m)</span> <span class="muted small">0 = removed · 1 = kept · Eq. 8</span></h2>
+            <h2 class="panel-title">Gain mask <span class="math">G(k, m)</span> <span class="muted small" id="gain-kind">0 = removed · 1 = kept · Eq. 8</span></h2>
           </div>
           <div class="plot plot-gain" id="plot-gain"></div>
         </section>
@@ -225,10 +225,10 @@
             <span><i class="sw noisy"></i>|Y| noisy</span>
             <span><i class="sw noise dash"></i><span id="insp-l-sub">α^(1/p)·|N̂| subtracted</span></span>
             <span><i class="sw noise dot"></i><span id="insp-l-floor">floor β^(1/p)·|N̂|</span></span>
-            <span><i class="sw clean"></i>|S̃| = G·|Y|</span>
+            <span><i class="sw clean"></i><span id="insp-l-out">|S̃| = G·|Y|</span></span>
           </div>
           <div class="plot plot-insp" id="plot-insp"></div>
-          <p class="hint" id="insp-hint">Click any time plot to inspect that frame. Where the amber |Y| falls below the dashed magenta line, Eq. 7 clamps the bin to the dotted floor. Isolated survivors above the line are the source of “musical noise”.</p>
+          <p class="hint" id="insp-hint">Click any time plot to inspect that frame. For spectral subtraction: where the amber |Y| falls below the dashed magenta line, Eq. 7 clamps the bin to the dotted floor, and isolated survivors above the line are the source of “musical noise”. Other algorithms show their noise estimate (tracked per frame for OM-LSA) and their gain floor.</p>
         </section>
       </div>
 
@@ -246,6 +246,22 @@
         <div class="plot plot-sweep" id="plot-sweep" data-empty="Press “Run sweep” to compute the α × β grid for this demo."></div>
         <p class="hint" id="sweep-info">Runs 77 combinations of α and β with all other parameters as currently set, and scores each against the clean reference.</p>
       </section>
+
+      <section class="panel plot-panel" id="compare-panel" hidden>
+        <div class="panel-head">
+          <h2 class="panel-title">Algorithm comparison <span class="muted small" id="compare-sub">all available algorithms · click a row to select it</span></h2>
+          <div class="sweep-actions">
+            <label class="check small" title="DNSMOS P.835: a model-predicted MOS that needs no clean reference (adds ≈ 0.1 s per 9 s of audio per algorithm)">
+              <input type="checkbox" id="compare-dnsmos"> DNSMOS</label>
+            <button class="btn btn-sm btn-accent" id="btn-compare" type="button">Compare all</button>
+          </div>
+        </div>
+        <div class="seg seg-sm compare-metric" role="radiogroup" aria-label="Chart metric" id="compare-metric"></div>
+        <div class="plot plot-compare" id="plot-compare" data-empty="Press “Compare all” to run every available algorithm on this clip."></div>
+        <div class="table-wrap"><table class="compare-table mono" id="compare-table"></table></div>
+        <p class="hint" id="compare-info">The framing, noise-estimate, attenuation-limit and output settings from the left apply to all algorithms. Each algorithm's own parameters are its defaults. Results are cached, so selecting a row is instant.</p>
+        <audio id="compare-audio" preload="none"></audio>
+      </section>
     </section>
 
     <!-- ============ RIGHT: metrics ============ -->
@@ -253,6 +269,7 @@
       <section class="panel">
         <h2 class="panel-title">Metrics</h2>
         <div id="metrics"><p class="muted">Metrics appear after processing.</p></div>
+        <div id="dnsmos"></div>
       </section>
 
       <section class="panel">
@@ -320,6 +337,22 @@
       <h3>Metrics</h3>
       <p>With a clean reference (demo mode): SNR <span class="eq-inline" data-tex="10\log_{10}\tfrac{\sum s^2}{\sum (s-\hat s)^2}"></span>, SI-SDR and segmental SNR.
         Without one (uploads and recordings) these are shown as <em>n/a</em>. Never estimated. Reference-free indicators instead: noise reduction over VAD noise frames, and a rough VAD-based SNR estimate.</p>
+
+      <h3>Comparison extension (beyond the Simulink model)</h3>
+      <p>The <em>Algorithm</em> menu swaps the gain rule while keeping the same STFT, noisy phase and overlap-add.
+        The <strong>statistical estimators</strong> are hand-written in <code>app/dsp/statistical.py</code>. They model speech and noise as Gaussian
+        and use a decision-directed a-priori SNR, which smooths the gain over time and greatly reduces musical noise:</p>
+      <div class="eq" data-tex="\gamma = \frac{|Y|^2}{\lambda_d},\qquad \xi(m) = \max\!\Big(\alpha_{dd}\,G^2(m-1)\,\gamma(m-1) + (1-\alpha_{dd})\max(\gamma-1,0),\ \xi_{\min}\Big)" data-n="23–24"></div>
+      <div class="eq" data-tex="G_{\text{Wiener}} = \frac{\xi}{1+\xi},\qquad G_{\text{LSA}} = \frac{\xi}{1+\xi}\exp\!\Big(\tfrac12 E_1(v)\Big),\quad v = \frac{\xi\gamma}{1+\xi}" data-n="25, 27"></div>
+      <div class="eq" data-tex="G_{\text{OM-LSA}} = G_{\text{LSA}}^{\,p}\,G_{\min}^{\,1-p}\quad(p = \text{speech-presence probability, IMCRA noise tracking})" data-n="28"></div>
+      <p>MMSE-STSA (Ephraim &amp; Malah 1984), log-MMSE (1985), Wiener-DD (Scalart &amp; Vieira Filho 1996), OM-LSA + IMCRA (Cohen 2001, 2003).
+        <strong>Third-party baselines</strong> (optional, <code>requirements-ml.txt</code>): noisereduce (spectral gating), WebRTC NS (the browser/Meet suppressor),
+        RNNoise (Valin 2018), NSNet2 (Microsoft DNS Challenge), DeepFilterNet3 (Schröter et al. 2023) and Demucs (Défossez et al. 2020).
+        For black-box models the gain-mask plot shows the <em>effective</em> mask |STFT(ŝ)|/|Y|.
+        A common <em>max attenuation</em> L applies to every method as <span class="eq-inline" data-tex="\hat s' = \ell y + (1-\ell)\hat s,\ \ell = 10^{-L/20}"></span> (Eq. 34).</p>
+      <p>Extra metrics: PESQ and (E)STOI need the clean reference (demo mode). DNSMOS P.835 is a neural <em>prediction</em> of listener ratings
+        (speech SIG, background BAK, overall OVRL) that works on any recording. Use it for ranking, not as a listening test.
+        See <code>docs/ALGORITHM.md</code> §12–13 and the benchmark (<code>scripts/benchmark.py</code>).</p>
 
       <h3>Limitations</h3>
       <ul>

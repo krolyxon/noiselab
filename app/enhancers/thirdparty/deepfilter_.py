@@ -38,6 +38,10 @@ class DeepFilterNet3:
         native_sr=SR, latency_ms=40.0, requires=("df", "torch", "torchaudio"),
     )
 
+    def warm(self, p: Params) -> None:
+        """Load the model outside the timed region (see processing.enhance)."""
+        load_model(bool(p.algo_params["post_filter"]))
+
     def process(self, ctx: EnhanceContext, p: Params) -> EnhanceResult:
         pf = bool(p.algo_params["post_filter"])
         return EnhanceResult(cleaned=run_at_rate(ctx.y, ctx.sr, SR, lambda x: _run(x, pf)))

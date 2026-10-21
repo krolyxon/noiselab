@@ -37,7 +37,13 @@ export function renderMetrics(root, m) {
       card("SI-SDR out", gt.si_sdr_out_db, "dB", { sub: delta(gt.si_sdr_in_db, gt.si_sdr_out_db, "dB"), cls: "c-clean",
         title: "Eq. (17), scale-invariant SDR" }),
       card("Segmental SNR", gt.seg_snr_out_db, "dB", { sub: delta(gt.seg_snr_in_db, gt.seg_snr_out_db, "dB"),
-        wide: true, title: "Eq. (18), per-frame SNR clamped to [−10, 35] dB" }),
+        title: "Eq. (18), per-frame SNR clamped to [−10, 35] dB" }),
+      card("LSD out", gt.lsd_out_db, "dB", { sub: delta(gt.lsd_in_db, gt.lsd_out_db, "dB", false),
+        title: "Eq. (35), log-spectral distance to the clean speech: speech distortion, lower is better" }),
+      card("PESQ (WB)", gt.pesq_out, "", { decimals: 2, sub: delta(gt.pesq_in, gt.pesq_out, ""), cls: "c-clean",
+        title: "ITU-T P.862.2 wide-band, MOS-LQO ≈ 1.0–4.6 (needs the optional 'pesq' package)" }),
+      card("ESTOI", gt.estoi_out, "", { decimals: 3, sub: delta(gt.estoi_in, gt.estoi_out, ""), cls: "c-clean",
+        title: "Extended short-time objective intelligibility, 0–1 (needs the optional 'pystoi' package)" }),
     ], "vs clean reference")
     : group("Ground truth", [
       card("SNR · SI-SDR · seg. SNR", null, "", { wide: true,
@@ -49,6 +55,8 @@ export function renderMetrics(root, m) {
     group("Noise", [
       card("Noise reduction", m.noise_reduction_db, "dB", { cls: "c-clean",
         title: "Eq. (19): mean attenuation over VAD noise frames" }),
+      card("Speech attenuation", m.speech_attenuation_db, "dB", {
+        title: "Eq. (36): mean attenuation over VAD speech frames. Lower = less speech lost (speech frames also contain noise)" }),
       card("Noise floor (est.)", m.noise_floor_dbfs, "dBFS", { title: "Level implied by |N̂|" }),
       card("SNR estimate out", m.vad_snr_out_db, "dB", { sub: delta(m.vad_snr_in_db, m.vad_snr_out_db, "dB"),
         title: "Reference-free, from the energy VAD (rough)" }),
@@ -66,4 +74,18 @@ export function renderMetrics(root, m) {
       card("Sample rate", m.sr, "Hz", { decimals: 0 }),
     ]),
   );
+}
+
+/** DNSMOS card group (§14): filled on demand, because scoring takes ~0.1 s per 9 s of audio. */
+export function renderDnsmos(root, { available, result, busy, onRun }) {
+  const cards = result
+    ? [["OVRL", "ovrl", "overall"], ["SIG", "sig", "speech quality"], ["BAK", "bak", "background noise"]].map(
+      ([lbl, k, what]) => card(`${lbl} · ${what}`, result.output?.[k], "", { decimals: 2,
+        sub: delta(result.input?.[k], result.output?.[k], ""), cls: k === "ovrl" ? "c-clean" : "",
+        title: "DNSMOS P.835 (Microsoft): a network's prediction of the mean opinion score (1–5). No clean reference needed." }))
+    : [card("DNSMOS P.835", null, "", { wide: true, sub: el("div", { class: "card-sub" },
+      available ? el("button", { class: "btn btn-sm", type: "button", disabled: busy, onclick: onRun,
+        text: busy ? "scoring…" : "Score with DNSMOS" })
+        : "n/a: install requirements-ml.txt and run scripts/fetch_models.py") })];
+  root.replaceChildren(group("Predicted MOS", cards, "model-based, no reference"));
 }

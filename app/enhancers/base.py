@@ -86,6 +86,14 @@ class Enhancer(Protocol):
 
     def process(self, ctx: EnhanceContext, p: Params) -> EnhanceResult: ...
 
+    # Optional: `warm(p)` loads models / sessions so that timing measures inference only.
+
+
+def warm(enhancer: Enhancer, p: Params) -> None:
+    fn = getattr(enhancer, "warm", None)
+    if fn is not None:
+        fn(p)
+
 
 def attenuation_limit(db: float) -> float:
     """Eq. (34): lim = 10^(−L/20). L ≥ 100 dB means 'off' (lim = 0)."""

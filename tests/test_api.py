@@ -364,3 +364,20 @@ def test_quality_endpoint_without_dnsmos_is_422_or_ok(client, demo_wav):
     j = _upload(client, demo_wav).get_json()
     r = client.post(f"/api/quality/{j['job_id']}")
     assert r.status_code == (200 if quality.available()["dnsmos"] else 422)
+
+
+def test_compare_endpoint_runs_each_algorithm(client):
+    j = client.post("/api/demo", json={"noise_type": "white", "snr_db": 5, "duration": 3}).get_json()
+    base = j["params"] | {"alpha": 3.0}
+    rows = {}
+    for algo in ("spectral_subtraction", "log_mmse", "omlsa"):
+        r = client.post(f"/api/compare/{j['job_id']}/{algo}", json={"params": base})
+        assert r.status_code == 200, r.get_json()
+        rows[algo] = r.get_json()
+        assert rows[algo]["ground_truth"]["si_sdr_improvement_db"] > 0
+        a = client.get(rows[algo]["audio"])
+        assert a.status_code == 200 and a.data[:4] == b"RIFF"
+    # flat params are taken from the UI (α = 3 for SS), algorithm params are defaults
+    assert rows["log_mmse"]["algo_params"]["dd_alpha"] == 0.98
+    assert client.post(f"/api/compare/{j['job_id']}/nope", json={}).status_code == 404
+    assert client.get(f"/api/audio/{j['job_id']}/cleaned_nope.wav").status_code == 404

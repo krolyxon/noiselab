@@ -23,6 +23,30 @@ const META = {
   freq_smooth_bins: { label: "Freq. smoothing", sym: "B", step: 1, show: (v) => (v <= 1 ? "off" : `${v} bins`) },
   output_gain_db: { label: "Output gain", sym: "dB", step: 0.5,
     show: (v) => (v > 0 ? "+" : "") + fmt(v, 1, "dB") },
+  atten_limit_db: { label: "Max attenuation", sym: "L", step: 1,
+    show: (v) => (v >= 100 ? "off" : fmt(v, 0, "dB")) },
+};
+
+// Per-algorithm parameters (§14): label, symbol, readout. Keys not listed fall back to the
+// schema's help text and a plain readout.
+const ALGO_META = {
+  dd_alpha: { label: "Decision-directed weight", sym: "α_dd", show: (v) => fmt(v, 3) },
+  xi_min_db: { label: "A-priori SNR floor", sym: "ξ_min", show: (v) => fmt(v, 0, "dB") },
+  gain_floor_db: { label: "Gain floor", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
+  g_min_db: { label: "Gain in speech absence", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
+  tracking_window_s: { label: "Noise-tracking window", sym: "D", show: (v) => fmt(v, 2, "s") },
+  stationary: { label: "Noise model", labels: (v) => (v ? "Stationary" : "Non-stationary") },
+  prop_decrease: { label: "Proportion removed", sym: "p", show: (v) => fmt(v * 100, 0, "%") },
+  n_std_thresh: { label: "Threshold", sym: "σ", show: (v) => `${fmt(v, 2)} σ` },
+  time_mask_smooth_ms: { label: "Mask smoothing (time)", show: (v) => fmt(v, 0, "ms") },
+  freq_mask_smooth_hz: { label: "Mask smoothing (freq.)", show: (v) => fmt(v, 0, "Hz") },
+  level: { label: "Suppression level", labels: (v) => ["", "mild", "moderate", "high", "very high"][v] },
+  phase_compensation: { label: "HPF phase compensation", labels: (v) => (v ? "On" : "Off") },
+  vad_threshold: { label: "VAD gate threshold", sym: "P(speech)", show: (v) => (v <= 0 ? "off" : fmt(v, 2)) },
+  gate_db: { label: "Gate attenuation", show: (v) => fmt(v, 0, "dB") },
+  min_gain_db: { label: "Minimum gain", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
+  post_filter: { label: "Post-filter", labels: (v) => (v ? "On" : "Off") },
+  model: { label: "Pretrained model" },
 };
 
 const GROUPS = [
@@ -30,18 +54,30 @@ const GROUPS = [
   { title: "Noise estimate", keys: ["noise_mode", "noise_seconds", "region_start", "region_end", "minstats_percentile"] },
   { title: "Subtraction", keys: ["method", "alpha", "beta", "exponent"] },
   { title: "Musical-noise smoothing", extended: true, keys: ["gain_smooth", "freq_smooth_bins"] },
-  { title: "Output", keys: ["output_gain_db"] },
+  { title: "Output", keys: ["atten_limit_db", "output_gain_db"] },
 ];
+const SS_ONLY_GROUPS = new Set(["Subtraction", "Musical-noise smoothing"]);
+
+/** Order-insensitive deep equality for plain JSON values (preset matching). */
+function same(a, b) {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => same(a[k], b[k]));
+}
 
 export class Controls {
-  constructor({ container, presetSelect, presetDesc, schema, presets, onChange }) {
+  constructor({ container, presetSelect, presetDesc, schema, presets, algorithms, onChange }) {
     this.container = container;
     this.presetSelect = presetSelect;
     this.presetDesc = presetDesc;
     this.schema = schema;
     this.presets = presets;
+    this.algorithms = Object.fromEntries((algorithms || []).map((a) => [a.id, a]));
     this.onChange = onChange;
     this.values = Object.fromEntries(Object.entries(schema).map(([k, s]) => [k, s.default]));
+    this.values.algo_params = this._algoDefaults(this.values.algorithm);
+    this.algoInputs = {};
     this.inputs = {};
     this.sr = null;
     this.profileId = null;
@@ -50,7 +86,14 @@ export class Controls {
     this._sync();
   }
 
-  get() { return { ...this.values }; }
+  get() { return { ...this.values, algo_params: { ...this.values.algo_params } }; }
+
+  algorithm() { return this.algorithms[this.values.algorithm]; }
+
+  _algoDefaults(id) {
+    const a = this.algorithms[id];
+    return a ? Object.fromEntries(Object.entries(a.schema).map(([k, s]) => [k, s.default])) : {};
+  }
 
   /** Parameters actually sent to the server (drop the ones irrelevant to the chosen mode). */
   request() {
@@ -60,12 +103,28 @@ export class Controls {
   }
 
   set(values, { emit = true } = {}) {
-    Object.assign(this.values, values);
+    const prevAlgo = this.values.algorithm;
+    const { algo_params: ap, ...flat } = values;
+    Object.assign(this.values, flat);
+    if (this.values.algorithm !== prevAlgo) {
+      this.values.algo_params = this._algoDefaults(this.values.algorithm);
+      this._buildAlgo();
+    }
+    if (ap) Object.assign(this.values.algo_params, ap);
     this._sync();
     if (emit) this.onChange?.(this.get());
   }
 
-  reset() { this.set(Object.fromEntries(Object.entries(this.schema).map(([k, s]) => [k, s.default]))); }
+  reset() {
+    const d = Object.fromEntries(Object.entries(this.schema).map(([k, s]) => [k, s.default]));
+    this.set({ ...d, algo_params: this._algoDefaults(d.algorithm) });
+  }
+
+  /** Default (algorithm-specific) parameters, keeping the current framing / noise / output settings. */
+  setAlgorithm(id) {
+    if (id === this.values.algorithm) return;
+    this.set({ algorithm: id });
+  }
 
   applyPreset(id) {
     const p = this.presets.find((x) => x.id === id);
@@ -93,17 +152,89 @@ export class Controls {
     this.presetSelect.addEventListener("change", () => this.applyPreset(this.presetSelect.value));
 
     const frag = document.createDocumentFragment();
+    frag.append(this._algoSelector());
+    this.algoBox = el("div", { class: "group algo-params" });
+    frag.append(this.algoBox);
     for (const g of GROUPS) {
-      const box = el("div", { class: "group" },
+      const box = el("div", { class: "group", "data-group": g.title },
         el("div", { class: "group-title" }, g.title, g.extended ? el("span", { class: "badge", text: "extended",
           title: "Beyond the basic Boll/Berouti algorithm; not in the basic Simulink model. Off by default." }) : null));
       for (const k of g.keys) box.append(this._field(k));
       frag.append(box);
     }
     this.container.replaceChildren(frag);
+    this._buildAlgo();
+  }
+
+  /** Algorithm dropdown grouped by family; unavailable models are disabled with the reason. */
+  _algoSelector() {
+    const sel = el("select", { id: "p-algorithm", "aria-label": "Algorithm" });
+    const fams = {};
+    for (const a of Object.values(this.algorithms)) (fams[a.family_name] ||= []).push(a);
+    for (const [fam, list] of Object.entries(fams)) {
+      const og = el("optgroup", { label: fam });
+      for (const a of list) {
+        og.append(el("option", { value: a.id, text: a.available ? a.name : `${a.name} — not installed`,
+          disabled: !a.available, title: a.available ? a.description : a.reason }));
+      }
+      sel.append(og);
+    }
+    sel.addEventListener("change", () => this.setAlgorithm(sel.value));
+    this.algoSelect = sel;
+    this.algoDesc = el("p", { class: "algo-desc" });
+    return el("div", { class: "group algo-group" },
+      el("div", { class: "group-title" }, "Algorithm"),
+      el("div", { class: "field", "data-key": "algorithm" }, sel), this.algoDesc);
+  }
+
+  /** (Re)build the controls of the selected algorithm's own parameters. */
+  _buildAlgo() {
+    if (!this.algoBox) return;
+    const a = this.algorithm();
+    this.algoInputs = {};
+    const keys = a ? Object.keys(a.schema) : [];
+    this.algoBox.hidden = keys.length === 0;
+    if (!keys.length) { this.algoBox.replaceChildren(); return; }
+    const title = el("div", { class: "group-title" }, `${a.name} parameters`,
+      a.hand_written ? null : el("span", { class: "badge", text: "third-party",
+        title: "A prebuilt comparison baseline (CLAUDE.md §14), not part of the Simulink algorithm." }));
+    this.algoBox.replaceChildren(title, ...keys.map((k) => this._algoField(k, a.schema[k])));
+  }
+
+  _algoField(key, s) {
+    const m = ALGO_META[key] || { label: key };
+    const head = el("div", { class: "field-label" },
+      el("span", {}, m.label, " ", el("span", { class: "sym", text: m.sym || "" })));
+    const field = el("div", { class: "field", "data-algo-key": key, title: s.help });
+    const setv = (v) => this.set({ algo_params: { [key]: v } });
+    const choices = s.type === "bool" ? [true, false] : s.choices;
+    if (choices) {
+      const seg = el("div", { class: "seg", role: "radiogroup", "aria-label": m.label });
+      for (const c of choices) {
+        seg.append(el("button", { type: "button", role: "radio", "data-v": String(c),
+          text: m.labels ? m.labels(c) : String(c), onclick: () => setv(c) }));
+      }
+      field.append(head, seg);
+      this.algoInputs[key] = { kind: "seg", node: seg };
+    } else {
+      const step = s.type === "int" ? 1 : niceStep((s.max - s.min) / 100);
+      const inp = el("input", { type: "range", min: s.min, max: s.max, step, "aria-label": m.label });
+      const out = el("span", { class: "readout" });
+      inp.addEventListener("input", () => {
+        this.values.algo_params[key] = s.type === "int" ? parseInt(inp.value, 10) : parseFloat(inp.value);
+        this._sync();
+        this.onChange?.(this.get());
+      });
+      inp.addEventListener("dblclick", () => setv(s.default));
+      head.append(out);
+      field.append(head, inp);
+      this.algoInputs[key] = { kind: "range", node: inp, out, show: m.show, s };
+    }
+    return field;
   }
 
   _field(key) {
+    if (key === "algorithm") return el("span");          // built by _algoSelector()
     const s = this.schema[key], m = META[key] || { label: key };
     const head = el("div", { class: "field-label" },
       el("span", {}, m.label, " ", el("span", { class: "sym", text: m.sym || "" })));
@@ -171,6 +302,35 @@ export class Controls {
       }
     }
 
+    // algorithm selector + its own parameters
+    const algo = this.algorithm();
+    if (this.algoSelect) {
+      this.algoSelect.value = v.algorithm;
+      this.algoDesc.textContent = algo ? algo.description : "";
+      this.algoDesc.title = algo ? algo.reference : "";
+    }
+    for (const [k, inp] of Object.entries(this.algoInputs)) {
+      const val = v.algo_params[k];
+      if (inp.kind === "seg") {
+        for (const b of $$("button", inp.node)) b.setAttribute("aria-checked", String(b.dataset.v === String(val)));
+      } else {
+        inp.node.value = String(val);
+        inp.node.style.setProperty("--fill", `${((val - inp.s.min) / (inp.s.max - inp.s.min)) * 100}%`);
+        inp.out.textContent = inp.show ? inp.show(val) : String(val);
+      }
+    }
+    const isSS = v.algorithm === "spectral_subtraction";
+    for (const g of $$(".group[data-group]", this.container)) {
+      const name = g.dataset.group;
+      g.hidden = (SS_ONLY_GROUPS.has(name) && !isSS) || (name === "Noise estimate" && algo && !algo.uses_noise_estimate);
+      if (name === "Framing") {
+        g.classList.toggle("muted-group", !!algo && !algo.hand_written);
+        g.title = algo && !algo.hand_written
+          ? "This model uses its own framing; these settings only affect the plots and the effective gain mask."
+          : "";
+      }
+    }
+
     // mode-dependent visibility
     const show = (k, on) => { const f = $(`.field[data-key="${k}"]`, this.container); if (f) f.hidden = !on; };
     show("noise_seconds", v.noise_mode === "initial");
@@ -199,8 +359,15 @@ export class Controls {
 
     // which preset (if any) matches the current values?
     const match = this.presets.find((p) => Object.entries(p.params).every(([k, pv]) =>
-      ["profile_id", "region_start", "region_end"].includes(k) || v[k] === pv));
+      ["profile_id", "region_start", "region_end"].includes(k) || same(v[k], pv)));
     this.presetSelect.value = match ? match.id : "";
     this.presetDesc.textContent = match ? match.description : "Custom settings.";
   }
+}
+
+/** A slider step of 1, 2 or 5 × 10^k close to x. */
+function niceStep(x) {
+  const e = 10 ** Math.floor(Math.log10(x));
+  const f = x / e;
+  return (f < 1.5 ? 1 : f < 3.5 ? 2 : 5) * e;
 }

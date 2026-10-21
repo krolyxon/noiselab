@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -17,7 +18,7 @@ from ..dsp.stft import istft, stft
 from ..dsp.stft import StftConfig, analysis_window, frame_times
 from ..enhancers import quality as Q
 from ..enhancers import registry
-from ..enhancers.base import EnhanceContext, EnhanceResult, apply_attenuation_limit, attenuation_limit
+from ..enhancers.base import EnhanceContext, EnhanceResult, apply_attenuation_limit, attenuation_limit, warm
 from ..params import Params, validate
 from .audio_io import write_wav
 from .jobs import Job, NoiseProfile
@@ -112,11 +113,14 @@ def enhance(job: Job, p: Params, profile: NoiseProfile | None = None
     if hit is None:
         ctx = EnhanceContext(y=job.y, sr=job.sr, cfg=cfg, spec=spec, mag=mag, noise_mag=noise_mag)
         try:
+            warm(registry.get(p.algorithm), p)              # model loading is not part of the timing
+            t0 = time.perf_counter()
             res = registry.get(p.algorithm).process(ctx, p)
         except (ValueError, RuntimeError, OSError) as exc:
             raise ProcessingError(f"{registry.spec(p.algorithm).name} failed: {exc}") from exc
         if not np.all(np.isfinite(res.cleaned)) or len(res.cleaned) != len(job.y):
             raise ProcessingError(f"{registry.spec(p.algorithm).name} returned an invalid signal")
+        res.extra["proc_s"] = time.perf_counter() - t0     # algorithm only (not STFT / metrics)
         explicit = res.gain is not None
         if not explicit:
             res.gain = effective_gain(res.cleaned, mag, cfg)
@@ -297,6 +301,51 @@ def inspect_frame(job: Job, t: float) -> dict[str, Any]:
         "algorithm": p.algorithm, "explicit_gain": bool(job.last.get("explicit_gain", True)),
         "noise_label": noise_label, "floor_label": floor_label,
     }
+
+
+def compare_one(job: Job, p: Params, profile: NoiseProfile | None = None, dnsmos: bool = False
+                ) -> dict[str, Any]:
+    """Run one algorithm for the Compare panel (§14): metrics only, no plots.
+
+    Shares the job's result cache with run(), so selecting a compared algorithm afterwards
+    is instant. Writes cleaned_<algorithm>.wav for listening.
+    """
+    enh, _, explicit = enhance(job, p, profile)
+    raw = enh.cleaned
+    frame, hop = p.stft.n_fft, p.stft.hop
+    e_noisy = M.frame_energy_db(job.y, frame, hop)
+    e_clean = M.frame_energy_db(raw, frame, hop)
+    speech = M.energy_vad(e_noisy)
+    row: dict[str, Any] = {
+        "algorithm": p.algorithm, "name": registry.spec(p.algorithm).name,
+        "family": registry.spec(p.algorithm).family, "explicit_gain": explicit,
+        "algo_params": p.algo_params,
+        "noise_reduction_db": _round(M.noise_reduction_db(e_noisy, e_clean, speech)),
+        "speech_attenuation_db": _round(M.speech_attenuation_db(e_noisy, e_clean, speech)),
+        "proc_ms": _round(enh.extra.get("proc_s", math.nan) * 1000, 1),
+        "real_time_factor": _round(enh.extra.get("proc_s", math.nan) / job.duration, 4),
+        "ground_truth": None, "dnsmos": None,
+    }
+    if job.clean is not None:
+        c = job.clean
+        q = Q.intrusive(c, raw, job.sr)
+        q_in = job.input_quality()
+        row["ground_truth"] = {
+            "si_sdr_improvement_db": _round(M.si_sdr_db(c, raw) - M.si_sdr_db(c, job.y)),
+            "snr_improvement_db": _round(M.snr_db(c, raw) - M.snr_db(c, job.y)),
+            "pesq_out": _round(q["pesq"], 3), "pesq_in": _round(q_in["pesq"], 3),
+            "estoi_out": _round(q["estoi"], 4), "estoi_in": _round(q_in["estoi"], 4),
+            "lsd_out_db": _round(M.log_spectral_distance_db(c, raw)),
+        }
+    if dnsmos and Q.available()["dnsmos"]:
+        if "dnsmos" not in job.quality_cache:
+            job.quality_cache["dnsmos"] = Q.dnsmos(job.y, job.sr)
+        d_in, d_out = job.quality_cache["dnsmos"], Q.dnsmos(raw, job.sr)
+        row["dnsmos"] = {"input": d_in and {k: round(v, 3) for k, v in d_in.items()},
+                         "output": d_out and {k: round(v, 3) for k, v in d_out.items()}}
+    write_wav(job.dir / f"cleaned_{p.algorithm}.wav", output_stage(raw, p.output_gain_db), job.sr)
+    row["audio"] = f"/api/audio/{job.id}/cleaned_{p.algorithm}.wav?v={job.version}.{len(job.results)}"
+    return row
 
 
 def perceptual_quality(job: Job) -> dict[str, Any]:

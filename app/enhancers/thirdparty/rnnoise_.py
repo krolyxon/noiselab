@@ -34,7 +34,7 @@ class RnNoise:
                                        "(0 = gate off)."),
             "gate_db": Spec(float, 30.0, lo=6.0, hi=60.0, help="Extra attenuation of gated frames (dB)."),
         },
-        native_sr=SR, latency_ms=10.0, requires=("pyrnnoise",),
+        native_sr=SR, latency_ms=20.0, requires=("pyrnnoise",),         # measured output delay: 960 samples
     )
 
     def process(self, ctx: EnhanceContext, p: Params) -> EnhanceResult:

@@ -38,6 +38,9 @@ class NsNet2:
         native_sr=SR, latency_ms=20.0, requires=("onnxruntime",), model_file="nsnet2",
     )
 
+    def warm(self, p: Params) -> None:
+        _get_session()
+
     def process(self, ctx: EnhanceContext, p: Params) -> EnhanceResult:
         g_min = 10.0 ** (p.algo_params["min_gain_db"] / 20.0)
         return EnhanceResult(cleaned=run_at_rate(ctx.y, ctx.sr, SR, lambda x: _run(x, g_min)))

@@ -50,7 +50,7 @@ from app.dsp import synth  # noqa: E402
 from app.enhancers import quality as Q  # noqa: E402
 from app.enhancers import registry  # noqa: E402
 from app.enhancers.resample import resample  # noqa: E402
-from app.enhancers.runner import enhance_signal  # noqa: E402
+from app.enhancers.runner import enhance_signal, prepare  # noqa: E402
 from app.params import PRESETS, validate  # noqa: E402
 
 SR = 16000
@@ -224,6 +224,11 @@ def run_unit(utt: dict, noise: str, snr: float, todo: list[tuple[str, dict, dict
     rows = []
     for label, params, extra in todo:
         p = validate(params)
+        try:
+            prepare(p)                    # model loading is not part of proc_s / rtf
+        except Exception as exc:
+            print(f"! {label} could not load: {type(exc).__name__}: {exc}", flush=True)
+            continue
         t0 = time.perf_counter()
         try:
             out = enhance_signal(noisy, SR, p)
