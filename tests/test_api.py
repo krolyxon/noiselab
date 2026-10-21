@@ -336,3 +336,11 @@ def test_sweep_rejects_non_ss_algorithm(client):
                                        "params": {"algorithm": "log_mmse"}}).get_json()
     r = client.post(f"/api/sweep/{j['job_id']}", json={"params": {"algorithm": "log_mmse"}})
     assert r.status_code == 422
+
+
+def test_api_unavailable_algorithm_is_a_clean_422(client, monkeypatch):
+    d = synth.make_demo("white", 5.0, sr=16000, duration=2.0, seed=0)
+    from app.enhancers import registry
+    monkeypatch.setattr(registry, "availability", lambda a: (False, "not installed (test)"))
+    r = _upload(client, wav_bytes(d["noisy"]), {"algorithm": "demucs"})
+    assert r.status_code == 422 and "not installed" in r.get_json()["error"]

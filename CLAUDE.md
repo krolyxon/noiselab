@@ -288,7 +288,7 @@ Goal: answer **"which noise-suppression algorithm works best under which conditi
 | `rnnoise` | hybrid DSP + RNN (Xiph; Jitsi, OBS) | `pyrnnoise` C library | 48 kHz |
 | `nsnet2` | DNN (Microsoft DNS-Challenge baseline) | ONNX via `onnxruntime` | 16 kHz |
 | `deepfilternet3` | DNN (Schröter et al. 2023) | `deepfilternet` (torch) | 48 kHz |
-| `demucs_dns64` | DNN, waveform (Défossez et al. 2020) | `denoiser` (torch) | 16 kHz |
+| `demucs` | DNN, waveform (Défossez et al. 2020; dns48 / dns64 / master64) | `denoiser` (torch) | 16 kHz |
 
 Rules:
 - Each third-party model is optional: availability is detected by try-import, reported in `/api/health` and `/api/algorithms`, and the model is greyed out in the UI with the reason. Tests that need it use `@pytest.mark.ml` and are skipped when it is missing.
@@ -297,6 +297,7 @@ Rules:
 - For models without an explicit gain, plots use the **effective** mask `|STFT(ŝ)| / |Y|` and label it as such.
 - Metrics: §5, plus PESQ (WB) and STOI/ESTOI when a clean reference exists, plus DNSMOS P.835 (SIG/BAK/OVRL) for any audio. DNSMOS is labelled a *model-predicted* MOS, never ground truth.
 - Benchmark: `scripts/benchmark.py` runs algorithms × noise types × SNRs × utterances at 16 kHz with fixed seeds, writing `results/bench.csv`. `scripts/report_figures.py` writes the figures and `results/summary.md`. Conclusions are written from those numbers, never in advance.
+- Alignment: every wrapper returns ŝ time-aligned with y (resampling is zero-phase; known model delays are removed: RNNoise 957 samples at 48 kHz, WebRTC NS 96 samples at 16 kHz). WebRTC's fixed high-pass filter phase is undone by default (`phase_compensation`), because SI-SDR would otherwise penalise an inaudible phase shift. `tests/test_thirdparty.py` checks the residual lag is ≤ 2 samples.
 - Known environment quirks: DeepFilterNet 0.5.6 imports the removed `torchaudio.backend`, so the wrapper installs a stub module before importing `df`. `hydra-core` 0.11 (pulled in by `denoiser`) ships a top-level `tests` package, which is why `tests/__init__.py` exists.
 
 ### Commands
