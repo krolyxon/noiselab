@@ -270,3 +270,20 @@ No bin can be attenuated by more than L dB. For gain-based methods this is exact
 | fan, 5 dB | +4.0 | +3.7 | +4.7 | +4.2 | +5.4 |
 
 These numbers come from one seed on the synthetic voiced signal. They are a sanity check, not the evaluation. The report should use the benchmark in `scripts/benchmark.py`: real speech, many seeds, confidence intervals.
+
+## 13. Comparison-bench metrics (§14)
+
+In addition to Eq. (15)–(20):
+
+$$\mathrm{LSD} = \frac{1}{|\mathcal F|}\sum_{m\in\mathcal F}\sqrt{\frac1K\sum_k\big(L_k(m)-\hat L_k(m)\big)^2},\qquad L = \max\!\big(10\log_{10}|S|^2,\ \max_k 10\log_{10}|S_k(m)|^2 - 50\big) \tag{35}$$
+
+Log-spectral distance is a measure of **speech distortion**: 0 dB means the spectrum is unchanged. Speech frames (𝓕) are selected as in Eq. (18). The 50 dB range limit stops empty bins (between harmonics, above the speech band) from dominating. LSD is level-sensitive on purpose: removing noise *is* a level change in noise-dominated bins.
+
+$$\mathrm{SA} = \frac{1}{|\mathcal S|}\sum_{m\in\mathcal S}\big(E_y(m) - E_{\hat s}(m)\big)\ \text{dB} \tag{36}$$
+
+Speech attenuation is the reference-free twin of Eq. (19), averaged over VAD speech frames 𝒮. Plotting noise reduction (Eq. 19) against speech attenuation (Eq. 36) shows each algorithm's trade-off on real recordings, where no clean reference exists.
+
+Third-party metrics (`app/enhancers/quality.py`, optional):
+- **PESQ**, ITU-T P.862.2 wide-band (`pesq`): both signals resampled to 16 kHz. MOS-LQO scale, about 1.0–4.64.
+- **STOI / ESTOI** (`pystoi`): short-time objective intelligibility, 0–1. ESTOI is stricter for modulated noise.
+- **DNSMOS P.835** (Microsoft, ONNX): a CNN trained on listener ratings predicts SIG (speech distortion), BAK (background intrusiveness) and OVRL (overall), each 1–5. It is **non-intrusive**: it needs no clean reference, so it scores uploaded and recorded audio too. It is a *prediction* of a MOS. Use it to rank systems, and never quote it as a listening-test result. The synthetic voiced signal of §9 gets SIG ≈ 2.2 even when clean, because it is not real speech. This is one reason the benchmark uses real speech. The reference script slides a 9.01 s window by 1 s. The app uses non-overlapping windows (≈ 9× faster). The benchmark's short utterances fit in one window, so the two agree there.

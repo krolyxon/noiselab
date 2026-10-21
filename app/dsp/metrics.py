@@ -97,3 +97,41 @@ def noise_reduction_db(noisy_energy_db: np.ndarray, cleaned_energy_db: np.ndarra
     if not noise.any():
         return None
     return float(np.mean(noisy_energy_db[noise] - cleaned_energy_db[noise]))
+
+
+def speech_attenuation_db(noisy_energy_db: np.ndarray, cleaned_energy_db: np.ndarray,
+                          speech: np.ndarray) -> float | None:
+    """Eq. (36): mean attenuation (dB) over frames the VAD labels as speech.
+
+    The reference-free counterpart of Eq. (19). A good suppressor has a high noise
+    reduction and a speech attenuation close to 0 dB. Together the two show the
+    noise-removal vs speech-damage trade-off on recordings without a clean reference.
+    (Speech frames still contain noise, so even a perfect method shows a small value here.)
+    """
+    if not speech.any():
+        return None
+    return float(np.mean(noisy_energy_db[speech] - cleaned_energy_db[speech]))
+
+
+def log_spectral_distance_db(clean: np.ndarray, estimate: np.ndarray, frame: int = 512, hop: int = 256,
+                             silence_db: float = -40.0, range_db: float = 50.0) -> float:
+    """Eq. (35): mean over speech frames of the RMS difference of the log power spectra (dB).
+
+    LSD = mean_m sqrt( mean_k (L_k(m) − L̂_k(m))² ),   L = max(10·log10 |S|², peak_m − R)
+
+    It measures **speech distortion**: how much the spectral shape of the speech was
+    changed. 0 dB = identical. Both log spectra are clipped to R = 50 dB below the clean
+    frame's peak bin, so differences in bins far below the speech (between harmonics,
+    or above its bandwidth) do not dominate. Frames where the clean signal is > 40 dB
+    below its loudest frame are skipped, as in Eq. (18). Periodic Hann window.
+    """
+    w = np.hanning(frame + 1)[:-1]
+    n = 1 + max(len(clean) - frame, 0) // hop
+    idx = np.arange(frame)[None, :] + hop * np.arange(n)[:, None]
+    ls = to_db(np.abs(np.fft.rfft(clean[idx] * w, axis=1)) ** 2)
+    le = to_db(np.abs(np.fft.rfft(estimate[idx] * w, axis=1)) ** 2)
+    e_s = to_db(np.mean(clean[idx] ** 2, axis=1))
+    keep = e_s > e_s.max() + silence_db
+    lo = ls[keep].max(axis=1, keepdims=True) - range_db
+    d = np.maximum(ls[keep], lo) - np.maximum(le[keep], lo)
+    return float(np.mean(np.sqrt(np.mean(d**2, axis=1))))

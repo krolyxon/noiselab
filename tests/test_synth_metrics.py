@@ -60,3 +60,23 @@ def test_vad_and_noise_reduction():
     quieter = metrics.frame_energy_db(d["noisy"] * 0.1)
     assert metrics.noise_reduction_db(e, quieter, speech) == pytest.approx(20.0, abs=1e-6)
     assert metrics.vad_snr_db(e, np.ones_like(speech)) is None
+
+
+# --- §14 metrics: LSD (Eq. 35), speech attenuation (Eq. 36) ----------------------------------
+
+def test_log_spectral_distance_properties():
+    from app.dsp.metrics import log_spectral_distance_db
+    d = synth.make_demo("white", 10.0, sr=16000, duration=4.0, seed=0)
+    c = d["clean"]
+    assert log_spectral_distance_db(c, c) == 0.0
+    lsd = [log_spectral_distance_db(c, synth.make_demo("white", s, sr=16000, duration=4.0, seed=0)["noisy"])
+           for s in (0, 10, 20)]
+    assert lsd[0] > lsd[1] > lsd[2] > 0          # more noise → more spectral distortion
+
+
+def test_speech_attenuation_reference_free():
+    from app.dsp.metrics import speech_attenuation_db
+    e = np.array([-20.0, -20.0, -60.0, -60.0])
+    speech = np.array([True, True, False, False])
+    assert speech_attenuation_db(e, e - 3.0, speech) == pytest.approx(3.0)
+    assert speech_attenuation_db(e, e, np.zeros(4, bool)) is None

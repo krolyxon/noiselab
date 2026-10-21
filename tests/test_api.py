@@ -344,3 +344,23 @@ def test_api_unavailable_algorithm_is_a_clean_422(client, monkeypatch):
     monkeypatch.setattr(registry, "availability", lambda a: (False, "not installed (test)"))
     r = _upload(client, wav_bytes(d["noisy"]), {"algorithm": "demucs"})
     assert r.status_code == 422 and "not installed" in r.get_json()["error"]
+
+
+def test_demo_perceptual_metrics_are_null_or_numbers(client):
+    """Without the optional packages PESQ/STOI are null (shown as n/a), never faked."""
+    from app.enhancers import quality
+    j = client.post("/api/demo", json={"noise_type": "white", "snr_db": 5, "duration": 3}).get_json()
+    gt = j["metrics"]["ground_truth"]
+    for k in ("pesq_in", "pesq_out", "stoi_in", "stoi_out", "estoi_in", "estoi_out"):
+        assert k in gt
+        name = "pesq" if k.startswith("pesq") else "stoi"
+        assert (gt[k] is None) != quality.available()[name]
+    assert gt["lsd_in_db"] > gt["lsd_out_db"] > 0
+    assert j["metrics"]["speech_attenuation_db"] is not None
+
+
+def test_quality_endpoint_without_dnsmos_is_422_or_ok(client, demo_wav):
+    from app.enhancers import quality
+    j = _upload(client, demo_wav).get_json()
+    r = client.post(f"/api/quality/{j['job_id']}")
+    assert r.status_code == (200 if quality.available()["dnsmos"] else 422)

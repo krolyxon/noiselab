@@ -22,6 +22,7 @@ from . import __version__
 from .dsp import synth
 from .dsp.noise_estimation import estimate_profile
 from .dsp.stft import StftConfig
+from .enhancers import quality as Q
 from .enhancers import registry
 from .params import PRESETS, SCHEMA, ParamError, schema_json, validate
 from .services import processing
@@ -160,9 +161,18 @@ def health():
                 "max_duration_s": cfg["MAX_DURATION_S"], "max_sample_rate": cfg["MAX_SAMPLE_RATE"],
                 "job_ttl_s": cfg["JOB_TTL_S"]},
         noise_types=list(synth.NOISE_TYPES),
+        quality_metrics=Q.available(),
         algorithms={a["id"]: {"available": a["available"], "reason": a["reason"]}
                     for a in registry.algorithms_json()},
     )
+
+
+@bp.post("/api/quality/<job_id>")
+def quality(job_id: str):
+    """DNSMOS of the input and of the latest output (slow, so it is a separate call)."""
+    job = _get_job(job_id)
+    with job.lock:
+        return jsonify(processing.perceptual_quality(job))
 
 
 @bp.get("/api/algorithms")

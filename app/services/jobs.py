@@ -48,6 +48,7 @@ class Job:
     # Enhancer outputs keyed by the parameters that produce them, so slow models (DNNs)
     # are not re-run when only the attenuation limit / output gain changes (§14).
     results: OrderedDict[str, Any] = field(default_factory=OrderedDict, repr=False)
+    quality_cache: dict[str, Any] = field(default_factory=dict, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     @property
@@ -63,6 +64,16 @@ class Job:
             self._stft[cfg.key] = (spec, np.abs(spec))
         return self._stft[cfg.key]
 
+
+    def input_quality(self) -> dict[str, Any]:
+        """Reference-based quality of the *unprocessed* input (demo jobs), computed once."""
+        if "intrusive" not in self.quality_cache:
+            from ..dsp.metrics import log_spectral_distance_db
+            from ..enhancers.quality import intrusive
+            q = intrusive(self.clean, self.y, self.sr)
+            q["lsd_db"] = log_spectral_distance_db(self.clean, self.y)
+            self.quality_cache["intrusive"] = q
+        return self.quality_cache["intrusive"]
 
     def remember_result(self, key: str, value: Any, keep: int = 8) -> None:
         self.results[key] = value

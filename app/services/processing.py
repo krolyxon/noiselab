@@ -15,6 +15,7 @@ from ..dsp.noise_estimation import estimate_initial, estimate_minstats, estimate
 from ..dsp.spectral_subtraction import compute_gain, output_stage, subtracted_magnitude
 from ..dsp.stft import istft, stft
 from ..dsp.stft import StftConfig, analysis_window, frame_times
+from ..enhancers import quality as Q
 from ..enhancers import registry
 from ..enhancers.base import EnhanceContext, EnhanceResult, apply_attenuation_limit, attenuation_limit
 from ..params import Params, validate
@@ -147,7 +148,13 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
         c, raw = job.clean, res.cleaned_raw
         snr_in, snr_out = M.snr_db(c, job.y), M.snr_db(c, raw)
         sdr_in, sdr_out = M.si_sdr_db(c, job.y), M.si_sdr_db(c, raw)
+        q_in = job.input_quality()
+        q_out = Q.intrusive(c, raw, job.sr)
         gt = {
+            "pesq_in": _round(q_in["pesq"], 3), "pesq_out": _round(q_out["pesq"], 3),
+            "stoi_in": _round(q_in["stoi"], 4), "stoi_out": _round(q_out["stoi"], 4),
+            "estoi_in": _round(q_in["estoi"], 4), "estoi_out": _round(q_out["estoi"], 4),
+            "lsd_in_db": _round(q_in["lsd_db"]), "lsd_out_db": _round(M.log_spectral_distance_db(c, raw)),
             "snr_in_db": _round(snr_in), "snr_out_db": _round(snr_out),
             "snr_improvement_db": _round(snr_out - snr_in),
             "si_sdr_in_db": _round(sdr_in), "si_sdr_out_db": _round(sdr_out),
@@ -195,7 +202,7 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
     if job.version == 1 and job.clean is not None:
         write_wav(job.dir / "clean.wav", job.clean, job.sr)
     job.last = {"params": p, "noise_mag": noise_mag, "gain": res.gain, "explicit_gain": explicit_gain,
-                "noise_power": enh.noise_power}
+                "noise_power": enh.noise_power, "cleaned_raw": res.cleaned_raw}
 
     elapsed = time.perf_counter() - t_start
     m = {
@@ -204,6 +211,7 @@ def run(job: Job, p: Params, profile: NoiseProfile | None = None) -> dict[str, A
         "input_peak_dbfs": _round(M.peak_dbfs(job.y)), "output_peak_dbfs": _round(M.peak_dbfs(res.cleaned)),
         "noise_floor_dbfs": _round(noise_floor_dbfs(noise_mag, cfg)),
         "noise_reduction_db": _round(M.noise_reduction_db(e_noisy, e_clean, speech)),
+        "speech_attenuation_db": _round(M.speech_attenuation_db(e_noisy, e_clean, speech)),
         "vad_snr_in_db": _round(vad_in), "vad_snr_out_db": _round(vad_out),
         "speech_fraction": _round(float(speech.mean()), 3),
         "dsp_ms": _round(t_dsp * 1000, 1), "processing_ms": _round(elapsed * 1000, 1),
@@ -289,6 +297,27 @@ def inspect_frame(job: Job, t: float) -> dict[str, Any]:
         "algorithm": p.algorithm, "explicit_gain": bool(job.last.get("explicit_gain", True)),
         "noise_label": noise_label, "floor_label": floor_label,
     }
+
+
+def perceptual_quality(job: Job) -> dict[str, Any]:
+    """DNSMOS P.835 of the input (cached per job) and of the latest output (§14).
+
+    Kept out of run() because it costs ~0.1 s per 9 s of audio, which is too slow for
+    slider-driven reprocessing.
+    """
+    if not job.last:
+        raise ProcessingError("job has not been processed yet")
+    if not Q.available()["dnsmos"]:
+        raise ProcessingError("DNSMOS is not available: install requirements-ml.txt and run "
+                              "scripts/fetch_models.py")
+    t0 = time.perf_counter()
+    if "dnsmos" not in job.quality_cache:
+        job.quality_cache["dnsmos"] = Q.dnsmos(job.y, job.sr)
+    out = Q.dnsmos(job.last["cleaned_raw"], job.sr)
+    r = lambda d: None if d is None else {k: round(v, 3) for k, v in d.items()}  # noqa: E731
+    return {"version": job.version, "input": r(job.quality_cache["dnsmos"]), "output": r(out),
+            "model": "DNSMOS P.835 (Microsoft), predicted MOS 1–5: SIG speech, BAK background, OVRL overall",
+            "ms": round((time.perf_counter() - t0) * 1000, 1)}
 
 
 SWEEP_ALPHAS = (1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)

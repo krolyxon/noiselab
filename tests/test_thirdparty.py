@@ -98,3 +98,45 @@ def test_api_process_black_box_reports_effective_gain(client):
     f = client.get(f"/api/frame/{j['job_id']}?t=1.0").get_json()
     assert f["explicit_gain"] is False and f["floor_db"] is None
 
+
+
+# --- §14 perceptual metrics ------------------------------------------------------------------
+
+def _need_quality(name: str) -> None:
+    from app.enhancers import quality
+    if not quality.available()[name]:
+        pytest.skip(f"{name} not installed")
+
+
+def test_pesq_stoi_ordering():
+    _need_quality("pesq")
+    _need_quality("stoi")
+    from app.enhancers import quality
+    d = synth.make_demo("white", 5.0, sr=16000, duration=5.0, seed=0)
+    ident = quality.intrusive(d["clean"], d["clean"], 16000)
+    noisy = quality.intrusive(d["clean"], d["noisy"], 16000)
+    assert ident["pesq"] > 4.4 and ident["stoi"] > 0.999
+    assert noisy["pesq"] < ident["pesq"] and noisy["stoi"] < ident["stoi"] and noisy["estoi"] < noisy["stoi"]
+
+
+def test_dnsmos_rates_clean_background_higher():
+    _need_quality("dnsmos")
+    from app.enhancers import quality
+    d = synth.make_demo("white", 0.0, sr=16000, duration=4.0, seed=0)
+    q_clean, q_noisy = quality.dnsmos(d["clean"], 16000), quality.dnsmos(d["noisy"], 16000)
+    assert set(q_clean) == {"sig", "bak", "ovrl"}
+    assert q_clean["bak"] > q_noisy["bak"] + 1.0
+    assert all(1.0 <= v <= 5.0 for v in (*q_clean.values(), *q_noisy.values()))
+
+
+def test_api_demo_reports_perceptual_metrics_and_dnsmos(client):
+    _need_quality("pesq")
+    _need_quality("dnsmos")
+    j = client.post("/api/demo", json={"noise_type": "white", "snr_db": 5, "duration": 4,
+                                       "params": {"algorithm": "log_mmse"}}).get_json()
+    gt = j["metrics"]["ground_truth"]
+    assert gt["pesq_out"] > gt["pesq_in"] and gt["stoi_out"] is not None and gt["lsd_out_db"] < gt["lsd_in_db"]
+    q = client.post(f"/api/quality/{j['job_id']}")
+    assert q.status_code == 200, q.get_json()
+    qj = q.get_json()
+    assert qj["output"]["bak"] > qj["input"]["bak"] and qj["version"] == j["version"]
