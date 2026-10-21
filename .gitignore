@@ -12,3 +12,8 @@ out/
 *.asv
 slprj/
 *.slxc
+.venv-ml/
+# comparison bench (CLAUDE.md §14): downloaded data, model files, benchmark output
+data/
+models/
+results/

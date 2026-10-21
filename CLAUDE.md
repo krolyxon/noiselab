@@ -15,7 +15,7 @@ It has two deliverables:
 
 - **The Simulink model is the project.** The web app is an extension and must be described as one in every doc and in the UI "About" panel. Never present the web app as a replacement for the Simulink work.
 - **Algorithm parity.** The Python DSP must implement the same steps as the Simulink model (same window, frame size, overlap, subtraction rule, phase handling). A `scripts/compare_simulink_python.py` script must demonstrate this on the same input file.
-- **No black-box denoisers.** Do NOT use `noisereduce`, `deepfilternet`, RNNoise, Demucs, or any prebuilt denoising library. The DSP is written by hand with NumPy/SciPy so the author can explain every line in a viva.
+- **The core algorithm stays hand-written.** Everything in `app/dsp/` (spectral subtraction and the statistical estimators of §14) is written by hand with NumPy/SciPy, so the author can explain every line in a viva. Prebuilt denoisers (`noisereduce`, WebRTC NS, RNNoise, NSNet2, DeepFilterNet, Demucs) are allowed **only** as optional comparison baselines in `app/enhancers/thirdparty/` (§14). They must never be imported by `app/dsp/` or presented as the project's own algorithm.
 - **Honesty about what was tested.** Claude cannot run MATLAB. Any `.m` file or `.slx` guidance must be labelled "untested — run and fix in MATLAB". Never claim the Simulink model works.
 - **Explainability over cleverness.** Prefer readable code with comments linking each step to an equation in `docs/ALGORITHM.md`.
 
@@ -27,6 +27,7 @@ It has two deliverables:
 - Audio capture: browser MediaRecorder / Web Audio API. Decode in the browser with `AudioContext.decodeAudioData`, then upload **16-bit PCM WAV** so the server never needs ffmpeg.
 - **Vendor all JS/CSS/fonts into `app/static/vendor/`** (Plotly, KaTeX, fonts). College labs often block CDNs. CDN links may exist only as a commented fallback.
 - Mic access requires `localhost` or HTTPS. Document this in README.
+- **Optional comparison-bench stack (§14):** a separate Python 3.12 venv `.venv-ml` from `requirements-ml.txt` (PyTorch CPU, onnxruntime, the third-party enhancers, `pesq`, `pystoi`). The base app must keep working, and its tests passing, without it.
 
 ## 3. Repository layout
 
@@ -252,7 +253,7 @@ python scripts/compare_simulink_python.py samples/noisy.wav out/cleaned_simulink
 ## 12. Working agreements for Claude
 
 - Work milestone by milestone; run `pytest -q` and start the server to verify before saying a milestone is done. If browser tools are available, take screenshots to check the UI actually renders.
-- Ask before adding any new dependency beyond §2. Never add a denoising library.
+- Ask before adding any new dependency beyond §2 / `requirements-ml.txt`. Denoising libraries go only in `app/enhancers/thirdparty/` (§14).
 - Keep functions pure and typed; DSP modules must not import Flask.
 - Comment DSP code with equation numbers from `docs/ALGORITHM.md`.
 - Don't leave placeholder or fake data in the UI. If a metric can't be computed honestly, show "n/a".
@@ -268,3 +269,45 @@ python scripts/compare_simulink_python.py samples/noisy.wav out/cleaned_simulink
 - Simulink README, block table and scripts exist and are honestly labelled as to what was tested.
 - `docs/VIVA.md` and `docs/REPORT_OUTLINE.md` exist.
 - The UI and README both state plainly: **the Simulink model is the primary implementation; the web app is an extension.**
+
+## 14. v2 — Algorithm comparison bench (extension)
+
+Goal: answer **"which noise-suppression algorithm works best under which conditions?"** with graphs, statistics and conclusions for the report, as requested by the project guide. The Simulink model stays spectral subtraction only and remains the primary implementation. Everything in this section is a further extension of the web app.
+
+### Algorithms (registry in `app/enhancers/`)
+
+| id | Family | Implementation | Native rate |
+|---|---|---|---|
+| `spectral_subtraction`, `wiener` | classical | hand-written, `app/dsp/spectral_subtraction.py` (Simulink parity) | any |
+| `wiener_dd` | statistical | hand-written, decision-directed Wiener (Scalart & Vieira Filho 1996) | any |
+| `mmse_stsa` | statistical | hand-written, Ephraim & Malah 1984 | any |
+| `log_mmse` | statistical | hand-written, Ephraim & Malah 1985 | any |
+| `omlsa` | statistical, adaptive noise | hand-written, OM-LSA + IMCRA (Cohen 2002/2003) | any |
+| `noisereduce` | spectral gating (library) | `noisereduce` | any |
+| `webrtc_ns` | production DSP (WebRTC / Meet) | `webrtc-noise-gain` | 16 kHz |
+| `rnnoise` | hybrid DSP + RNN (Xiph; Jitsi, OBS) | `pyrnnoise` C library | 48 kHz |
+| `nsnet2` | DNN (Microsoft DNS-Challenge baseline) | ONNX via `onnxruntime` | 16 kHz |
+| `deepfilternet3` | DNN (Schröter et al. 2023) | `deepfilternet` (torch) | 48 kHz |
+| `demucs_dns64` | DNN, waveform (Défossez et al. 2020) | `denoiser` (torch) | 16 kHz |
+
+Rules:
+- Each third-party model is optional: availability is detected by try-import, reported in `/api/health` and `/api/algorithms`, and the model is greyed out in the UI with the reason. Tests that need it use `@pytest.mark.ml` and are skipped when it is missing.
+- Model files (`models/`), datasets (`data/`) and benchmark output (`results/`) are downloaded or generated and are gitignored. `scripts/fetch_models.py` and `scripts/fetch_datasets.py` verify SHA-256 sums.
+- Every algorithm exposes tweakable parameters through the same reject-don't-clamp schema as §4. A generic attenuation limit and a wet/dry mix apply identically to all of them, for fair comparisons.
+- For models without an explicit gain, plots use the **effective** mask `|STFT(ŝ)| / |Y|` and label it as such.
+- Metrics: §5, plus PESQ (WB) and STOI/ESTOI when a clean reference exists, plus DNSMOS P.835 (SIG/BAK/OVRL) for any audio. DNSMOS is labelled a *model-predicted* MOS, never ground truth.
+- Benchmark: `scripts/benchmark.py` runs algorithms × noise types × SNRs × utterances at 16 kHz with fixed seeds, writing `results/bench.csv`. `scripts/report_figures.py` writes the figures and `results/summary.md`. Conclusions are written from those numbers, never in advance.
+- Known environment quirks: DeepFilterNet 0.5.6 imports the removed `torchaudio.backend`, so the wrapper installs a stub module before importing `df`. `hydra-core` 0.11 (pulled in by `denoiser`) ships a top-level `tests` package, which is why `tests/__init__.py` exists.
+
+### Commands
+
+```bash
+uv venv -p 3.12 .venv-ml
+VIRTUAL_ENV=.venv-ml uv pip install torch==2.14.1 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+VIRTUAL_ENV=.venv-ml uv pip install -r requirements-ml.txt
+.venv-ml/bin/python scripts/fetch_models.py
+.venv-ml/bin/python scripts/fetch_datasets.py
+.venv-ml/bin/python scripts/benchmark.py --quick        # then without --quick for the report
+.venv-ml/bin/python scripts/report_figures.py
+.venv-ml/bin/flask --app app run --debug
+```
