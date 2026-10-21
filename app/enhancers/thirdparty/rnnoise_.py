@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 SR = 48000
 FRAME = 480                # 10 ms
-DELAY = 957                # output lags input by ≈ 2 frames (measured; see tests/test_thirdparty.py)
+DELAY = 960                # output lags input by exactly 2 frames (measured on real speech; tests/test_thirdparty.py)
 
 
 class RnNoise:

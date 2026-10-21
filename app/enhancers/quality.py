@@ -12,6 +12,7 @@ Every function returns None when its package or model is missing (the UI shows "
 from __future__ import annotations
 
 import importlib.util
+import os
 import threading
 from typing import Any
 
@@ -68,7 +69,7 @@ def _dnsmos_session():
         if _dnsmos is None:
             import onnxruntime as ort
             so = ort.SessionOptions()
-            so.intra_op_num_threads = 2
+            so.intra_op_num_threads = int(os.environ.get("NOISELAB_ORT_THREADS", "2"))
             _dnsmos = ort.InferenceSession(str(model_files.locate("dnsmos_p835")), so,
                                            providers=["CPUExecutionProvider"])
         return _dnsmos

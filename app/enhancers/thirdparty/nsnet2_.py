@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import TYPE_CHECKING
 
@@ -51,7 +52,7 @@ def _get_session():
             if path is None:
                 raise OSError("NSNet2 model missing — run scripts/fetch_models.py")
             so = ort.SessionOptions()
-            so.intra_op_num_threads = 2
+            so.intra_op_num_threads = int(os.environ.get("NOISELAB_ORT_THREADS", "2"))
             _session = ort.InferenceSession(str(path), so, providers=["CPUExecutionProvider"])
         return _session
 
