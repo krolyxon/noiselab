@@ -29,11 +29,12 @@ sys.path.insert(0, str(ROOT))
 
 RESULTS = ROOT / "results"
 
+from app import glossary as G  # noqa: E402  (plain-language wording, shared with the UI)
+
 # --- visual system (dataviz reference palette, light mode; validated: 4 slots pass) -----------
 SURFACE, INK, INK2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
 FAMILY_COLOR = {"classical": "#2a78d6", "statistical": "#eb6834", "library": "#1baf7a", "deep": "#eda100"}
-FAMILY_NAME = {"classical": "Classical (Simulink SS)", "statistical": "Statistical (hand-written)",
-               "library": "DSP library", "deep": "Deep learning"}
+FAMILY_NAME = {k: v.short for k, v in G.FAMILIES.items()}
 STYLES = [("-", "o"), ("--", "s"), (":", "^"), ("-.", "D")]
 SEQ_BLUE = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 DIV_NEG, DIV_MID, DIV_POS = "#e34948", "#f0efec", "#2a78d6"
@@ -129,6 +130,20 @@ def noise_class(r) -> str:
 
 
 CLASSES = ("Stationary synthetic", "Non-stationary synthetic", "Real noise (DEMAND)")
+CLASS_TITLE = {"Stationary synthetic": "Steady noise\n(white, pink, 50 Hz hum, fan)",
+               "Non-stationary synthetic": "Changing noise\n(babble, clicks)",
+               "Real noise (DEMAND)": "Real recorded noise\n(home, café, street, car, office)"}
+
+
+def _head(fig, title: str, howto: str) -> None:
+    """Plain title + a one-line 'how to read this' above the plot (kept clear of bottom legends)."""
+    # Positions in inches above the axes area, so short and tall figures look the same.
+    h = fig.get_size_inches()[1]
+    n_lines = howto.count("\n") + 1
+    fig.text(0.01, 1 + 0.08 / h, "How to read: " + howto, fontsize=8.6, color=INK2, ha="left", va="bottom",
+             transform=fig.transFigure, linespacing=1.3)
+    fig.text(0.01, 1 + (0.16 + 0.19 * n_lines) / h, title, fontsize=12, fontweight="bold", color=INK,
+             ha="left", va="bottom", transform=fig.transFigure)
 
 
 def _family_legend(ax_or_fig, fams, **kw):
@@ -175,16 +190,17 @@ def fig_metric_vs_snr(rows, metric, ylabel, title, path, plt):
             if np.isfinite(ys[-1]):
                 ends.append((snrs[-1], ys[-1], LABEL[c], color))
         ax.axhline(0, color=AXIS, lw=1, zorder=0)
-        ax.set_title(cls)
-        ax.set_xlabel("input SNR (dB)")
+        ax.set_title(CLASS_TITLE[cls])
+        ax.set_xlabel("starting noise level: input SNR (dB)  ← noisier")
         ax.set_xticks(snrs)
         _direct_labels(ax, ends, x_pad=(snrs[-1] - snrs[0]) * 0.04 if len(snrs) > 1 else 0.5)
     axes[0].set_ylabel(ylabel)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=min(len(cfgs), 6), fontsize=8,
                bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle(title, fontsize=11, fontweight="bold", color=INK, x=0.01, ha="left")
-    fig.tight_layout(rect=(0, 0.1, 0.93, 0.95))
+    fig.tight_layout(rect=(0, 0.1, 0.93, 1.0))
+    _head(fig, title, "each line is one method; higher = cleaner speech, 0 = no improvement. Left = very noisy "
+          "input, right = almost clean input (less is left to fix, so every line falls).")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -195,8 +211,8 @@ def fig_pesq_estoi(rows, path, plt):
     snrs = sorted({r["snr_db"] for r in rows})
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4.2))
     for ax, (out_m, in_m, ylab, ttl) in zip(axes, (
-            ("pesq_out", "pesq_in", "PESQ (WB, MOS-LQO)", "Perceptual quality (PESQ)"),
-            ("estoi_out", "estoi_in", "ESTOI", "Intelligibility (ESTOI)"))):
+            ("pesq_out", "pesq_in", G.label("pesq"), "How good does it sound?"),
+            ("estoi_out", "estoi_in", G.label("estoi"), "How many words can be understood?"))):
         g = group(rows, ("config", "snr_db"), out_m)
         gi = group(rows, ("snr_db",), in_m)
         ax.plot(snrs, [gi.get((s,), math.nan) for s in snrs], color=MUTED, ls="--", lw=1.5,
@@ -209,15 +225,16 @@ def fig_pesq_estoi(rows, path, plt):
                     markeredgecolor=SURFACE, markeredgewidth=1)
             ends.append((snrs[-1], ys[-1], LABEL[c], color))
         ax.set_title(ttl)
-        ax.set_xlabel("input SNR (dB)")
-        ax.set_ylabel(ylab)
+        ax.set_xlabel("starting noise level: input SNR (dB)  ← noisier")
+        ax.set_ylabel(ylab, fontsize=8)
         ax.set_xticks(snrs)
         _direct_labels(ax, [e for e in ends if np.isfinite(e[1])], (snrs[-1] - snrs[0]) * 0.04 or 0.5)
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h, lab, loc="lower center", ncol=6, fontsize=8, bbox_to_anchor=(0.5, -0.02))
-    fig.suptitle("Output quality vs input SNR (all noise types pooled)", fontsize=11, fontweight="bold",
-                 x=0.01, ha="left")
-    fig.tight_layout(rect=(0, 0.1, 0.92, 0.95))
+    fig.tight_layout(rect=(0, 0.1, 0.92, 1.0))
+    _head(fig, "Sound quality and intelligibility after cleaning (all 11 noise types together)",
+          "the grey dashed line is the noisy input before cleaning; a method helps where its line is above "
+          "the grey line. Higher = better.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -228,8 +245,8 @@ def fig_winner_grid(rows, path, plt):
     fam = family_of(rows)
     noises = [n for n in NOISE_ORDER if any(r["noise"] == n for r in rows)]
     snrs = sorted({r["snr_db"] for r in rows})
-    metrics = [("d_si_sdr", "ΔSI-SDR")] + ([("d_pesq", "ΔPESQ")] if any(np.isfinite(r["d_pesq"]) for r in rows)
-                                            else [])
+    metrics = [("d_si_sdr", "speech clarity gain (ΔSI-SDR, dB)")] + (
+        [("d_pesq", "sound-quality improvement (ΔPESQ)")] if any(np.isfinite(r["d_pesq"]) for r in rows) else [])
     fig, axes = plt.subplots(1, len(metrics), figsize=(5.4 * len(metrics), 0.42 * len(noises) + 1.8))
     axes = np.atleast_1d(axes)
     for ax, (m, mlabel) in zip(axes, metrics):
@@ -248,17 +265,20 @@ def fig_winner_grid(rows, path, plt):
         ax.set_ylim(len(noises), 0)
         ax.set_xticks(np.arange(len(snrs)) + 0.5, [f"{s:g}" for s in snrs])
         ax.set_yticks(np.arange(len(noises)) + 0.5, [NOISE_LABEL[n] for n in noises])
-        ax.set_xlabel("input SNR (dB)")
+        ax.set_xlabel("starting noise level: input SNR (dB)  ← noisier")
         ax.grid(False)
-        ax.set_title(f"Best by {mlabel} (cell: winner, mean improvement)")
+        ax.set_title(f"Winner by {mlabel}", fontsize=9.5)
     _family_legend(fig, sorted({fam[c] for c in fam}, key=list(FAMILY_COLOR).index), loc="lower center",
                    ncol=4, fontsize=8, bbox_to_anchor=(0.5, -0.02))
     fig.tight_layout(rect=(0, 0.06, 1, 1))
+    _head(fig, "Which method is best for which noise and noise level?",
+          "each box names the winning method and its average improvement. Box colour = type of method "
+          "(yellow = neural network, orange = probability-based, green = DSP library, blue = our Simulink method).")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
-def fig_heatmap(rows, metric, title, path, plt, fmt="{:+.1f}"):
+def fig_heatmap(rows, metric, title, path, plt, fmt="{:+.1f}", howto=""):
     """Configuration × noise table of the mean metric (sequential blue, values printed)."""
     from matplotlib.colors import LinearSegmentedColormap
     cfgs = configs_in(rows)
@@ -278,10 +298,12 @@ def fig_heatmap(rows, metric, title, path, plt, fmt="{:+.1f}"):
     ax.set_xticks(range(len(noises)), [NOISE_LABEL[n] for n in noises], rotation=35, ha="right")
     ax.set_yticks(range(len(cfgs)), [LABEL[c] for c in cfgs])
     ax.grid(False)
-    ax.set_title(title, loc="left")
     cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
     cb.outline.set_visible(False)
+    cb.set_label(G.label(metric, arrow=False), fontsize=8)
     fig.tight_layout()
+    _head(fig, title, howto or "darker blue = bigger improvement. Read along a row to see where one method is "
+                               "strong or weak; read down a column to compare methods on one noise.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -330,20 +352,23 @@ def fig_tradeoff(rows, path, plt):
     g_sa = group(rows, ("config",), "speech_attenuation_db")
     g_lsd = group(rows, ("config",), "lsd_out")
     _scatter_labelled(axes[0], [(c, g_nr[(c,)], g_sa[(c,)]) for c in cfgs], fam)
-    axes[0].set_xlabel("noise reduction in noise-only frames (dB)  →  more noise removed")
-    axes[0].set_ylabel("attenuation of speech frames (dB)  →  more speech lost")
-    axes[0].set_title("Reference-free trade-off (Eq. 19 vs Eq. 36)")
+    axes[0].set_xlabel(G.label("noise_reduction"), fontsize=8)
+    axes[0].set_ylabel(G.label("speech_attenuation"), fontsize=8)
+    axes[0].set_title("Noise removed vs speech lost")
     lsd_in = mean_ci([r["lsd_in"] for r in rows])[0]
     axes[1].axhline(lsd_in, color=MUTED, ls="--", lw=1)          # before labelling: it changes the y-limits
     _scatter_labelled(axes[1], [(c, g_nr[(c,)], g_lsd[(c,)]) for c in cfgs], fam)
     axes[1].annotate("unprocessed input", (axes[1].get_xlim()[0], lsd_in), xytext=(4, 4),
                      textcoords="offset points", fontsize=7, color=MUTED)
-    axes[1].set_xlabel("noise reduction in noise-only frames (dB)")
-    axes[1].set_ylabel("log-spectral distance to clean speech (dB, Eq. 35)")
-    axes[1].set_title("Spectral distortion of the output (lower is better)")
+    axes[1].set_xlabel(G.label("noise_reduction"), fontsize=8)
+    axes[1].set_ylabel(G.label("lsd"), fontsize=8)
+    axes[1].set_title("Noise removed vs speech distortion")
     _family_legend(fig, sorted({fam[c] for c in cfgs}, key=list(FAMILY_COLOR).index), loc="lower center",
                    ncol=4, fontsize=8, bbox_to_anchor=(0.5, -0.03))
     fig.tight_layout(rect=(0, 0.06, 1, 1))
+    _head(fig, "Every method trades noise removal against speech damage",
+          "best = far right and low (lots of noise removed, little speech lost or distorted). "
+          "Left: measured without the clean speech; right: compared with the clean speech.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -363,8 +388,8 @@ def fig_cost(rows, path, plt, timing: dict[str, float] | None = None):
     """
     cfgs = configs_in(rows)
     fam = family_of(rows)
-    metric, mlabel = ("d_pesq", "mean ΔPESQ") if any(np.isfinite(r["d_pesq"]) for r in rows) \
-        else ("d_si_sdr", "mean ΔSI-SDR (dB)")
+    metric = "d_pesq" if any(np.isfinite(r["d_pesq"]) for r in rows) else "d_si_sdr"
+    mlabel = G.average(G.label(metric))
     g_q = group(rows, ("config",), metric)
     g_r = {c: (timing or {}).get(c, float(np.median([r["rtf"] for r in rows if r["config"] == c]))) for c in cfgs}
     pts = [(c, g_r[c], g_q[(c,)]) for c in cfgs]
@@ -373,17 +398,19 @@ def fig_cost(rows, path, plt, timing: dict[str, float] | None = None):
     front = sorted([p for p in pts if not any(q[1] <= p[1] and q[2] > p[2] for q in pts if q is not p)],
                    key=lambda p: p[1])
     ax.plot([p[1] for p in front], [p[2] for p in front], color=AXIS, lw=1.2, ls="--", zorder=1,
-            label="Pareto front")
+            label="best value-for-cost line (Pareto front)")
     ax.axvline(1.0, color=MUTED, lw=1, ls=":")
     ax.set_xscale("log")
     _scatter_labelled(ax, pts, fam)
-    ax.annotate("real time on one core", (1.0, ax.get_ylim()[0]), xytext=(-4, 4), textcoords="offset points",
-                fontsize=7, color=MUTED, ha="right")
-    src = "serial timing pass" if timing else "parallel grid, contended (run benchmark.py --timing)"
-    ax.set_xlabel(f"real-time factor, single CPU core, {src} (log scale)")
-    ax.set_ylabel(mlabel)
-    ax.set_title("Quality vs computational cost", loc="left")
+    ax.annotate("1.0 = needs a whole CPU core", (1.0, ax.get_ylim()[0]), xytext=(-4, 4),
+                textcoords="offset points", fontsize=7, color=MUTED, ha="right")
+    src = "" if timing else " [contended timings: run benchmark.py --timing]"
+    ax.set_xlabel(f"{G.label('rtf')}  (log scale: 0.001 = 0.1 % of one core){src}", fontsize=8)
+    ax.set_ylabel(mlabel, fontsize=8)
     fig.tight_layout(rect=(0, 0.05, 1, 1))
+    _head(fig, "How much sound quality does each method buy for its CPU cost?",
+          "up = better sound, right = more computation (each grid step = 10× more). "
+          "Methods on the dashed line are the best value for their cost.")
     _family_legend(fig, sorted({fam[c] for c in cfgs}, key=list(FAMILY_COLOR).index), loc="lower center",
                    ncol=4, fontsize=8, bbox_to_anchor=(0.5, -0.04))
     fig.tight_layout()
@@ -397,8 +424,9 @@ def fig_stationarity(rows, path, plt):
     y = np.arange(len(cfgs))
     fig, ax = plt.subplots(figsize=(7.4, 0.42 * len(cfgs) + 1.4))
     h = 0.38
-    for k, (st, name, color) in enumerate(((1.0, "stationary noise", "#2a78d6"),
-                                           (0.0, "non-stationary noise", "#eb6834"))):
+    for k, (st, name, color) in enumerate(((1.0, "steady noise (white, pink, hum, fan, car)", "#2a78d6"),
+                                           (0.0, "changing noise (babble, clicks, café, street, …)",
+                                            "#eb6834"))):
         vals = [g.get((c, st), math.nan) for c in cfgs]
         ax.barh(y + (k - 0.5) * (h + 0.04), vals, height=h, color=color, label=name, edgecolor=SURFACE, lw=2)
         for yi, v in zip(y, vals):
@@ -409,11 +437,13 @@ def fig_stationarity(rows, path, plt):
     ax.set_yticks(y, [LABEL[c] for c in cfgs])
     ax.invert_yaxis()
     ax.axvline(0, color=AXIS, lw=1)
-    ax.set_xlabel("mean ΔSI-SDR (dB)")
-    ax.set_title("Stationary vs non-stationary noise", loc="left")
-    ax.legend(loc="lower right", fontsize=8)
+    ax.set_xlabel(G.average(G.label("d_si_sdr")))
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.07), ncol=2, fontsize=8)
     ax.grid(axis="y", visible=False)
     fig.tight_layout()
+    _head(fig, "Steady vs changing noise",
+          "longer bar = clearer speech. A big gap between a method's two bars means it struggles "
+          "when the noise keeps changing.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -428,16 +458,19 @@ def fig_dnsmos_vs_pesq(rows, path, plt):
     rho = spearmanr(x, y).statistic
     fig, ax = plt.subplots(figsize=(5.6, 4.4))
     ax.scatter(x, y, s=8, color="#2a78d6", alpha=0.25, edgecolor="none")
-    ax.set_xlabel("PESQ (intrusive, needs clean reference)")
-    ax.set_ylabel("DNSMOS OVRL (non-intrusive prediction)")
-    ax.set_title(f"Does the reference-free score agree?  Spearman ρ = {rho:.2f}", loc="left")
+    ax.set_xlabel(G.label("pesq", arrow=False) + ": needs the clean speech", fontsize=8)
+    ax.set_ylabel(G.label("dnsmos_ovrl", arrow=False) + ": no clean speech needed", fontsize=8)
     fig.tight_layout()
+    _head(fig, f"Do the two automatic judges agree?  Rank correlation ρ = {rho:.2f}",
+          "each dot is one cleaned clip. ρ = 1: both scores rank clips the same; ρ = 0: unrelated.\n"
+          "High ρ = the AI score can be trusted on recordings that have no clean version.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     return rho
 
 
-def fig_sweeps(rows, path, plt, metric="d_si_sdr", ylabel="mean ΔSI-SDR (dB)"):
+def fig_sweeps(rows, path, plt, metric="d_si_sdr", ylabel=None):
+    ylabel = ylabel or G.average(G.label(metric, arrow=False))
     cfgs = [c for c in ORDER if any(r["config"] == c for r in rows)]
     noises = [n for n in NOISE_ORDER if any(r["noise"] == n for r in rows)]
     colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
@@ -457,17 +490,19 @@ def fig_sweeps(rows, path, plt, metric="d_si_sdr", ylabel="mean ΔSI-SDR (dB)"):
                     label=NOISE_LABEL[n], markeredgecolor=SURFACE, markeredgewidth=1)
         if categorical:
             ax.set_xticks(xs, ["off" if v >= 100 else f"{v:g}" for v in vals])
-        ax.set_title(f"{LABEL[c]}: {param}")
-        ax.set_xlabel(param)
+        ax.set_title(LABEL[c], fontsize=9.5)
+        ax.set_xlabel(G.PARAMS.get(param, param), fontsize=8)
     for ax in axes.flat[len(cfgs):]:
         ax.set_visible(False)
     for ax in axes[:, 0]:
-        ax.set_ylabel(ylabel)
+        ax.set_ylabel(ylabel, fontsize=8)
     h, lab = axes.flat[0].get_legend_handles_labels()
     fig.legend(h, lab, loc="lower center", ncol=len(noises), fontsize=8, bbox_to_anchor=(0.5, -0.02),
-               title=f"noise at {sub[0]['snr_db']:g} dB SNR", title_fontsize=8)
-    fig.suptitle(f"Parameter sensitivity ({ylabel})", fontsize=11, fontweight="bold", x=0.01, ha="left")
-    fig.tight_layout(rect=(0, 0.07, 1, 0.96))
+               title=f"noise type (all at {sub[0]['snr_db']:g} dB starting noise level)", title_fontsize=8)
+    fig.tight_layout(rect=(0, 0.07, 1, 1.0))
+    _head(fig, "What happens when you turn each method's main knob?",
+          "the peak of each line is the best setting. Flat line = the setting hardly matters; "
+          "steep line = choose it carefully. 'off' = no limit.")
     fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -509,9 +544,57 @@ def fig_spectrograms(rows, path, plt, noise="STRAFFIC", snr=5.0):
     cb = fig.colorbar(im, ax=axes, fraction=0.02, pad=0.01)
     cb.set_label("dB re. clean peak")
     cb.outline.set_visible(False)
-    fig.suptitle(f"Spectrograms of one utterance ({utt['id']})", fontsize=11, fontweight="bold", x=0.01,
-                 ha="left")
+    _head(fig, f"What the cleaned audio looks like (one sentence, {NOISE_LABEL[noise]} noise at {snr:g} dB)",
+          "spectrogram: time → right, pitch ↑ up, brightness = loudness. Clean speech = bright stripes on black; "
+          "a good method keeps the stripes and blacks out the rest.")
     fig.savefig(path, dpi=170, bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_glossary(path, plt):
+    """Figure 0: every term and every method in plain words. Put it before the results in the report."""
+    metric_keys = ["d_si_sdr", "d_pesq", "estoi", "lsd", "noise_reduction", "speech_attenuation",
+                   "dnsmos_ovrl", "rtf", "snr_in"]
+    rows_m = [(G.METRICS[k].short, G.METRICS[k].tech,
+               {"higher": "↑ higher", "lower": "↓ lower", "": "—"}[G.METRICS[k].better], G.METRICS[k].explain)
+              for k in metric_keys]
+    rows_t = [(G.TERMS[k].short, G.TERMS[k].tech, "", G.TERMS[k].explain)
+              for k in ("ci", "wilcoxon", "pareto", "stationary")]
+    rows_a = [(LABEL.get(a if a != "spectral_subtraction" else "ss_simulink", a),
+               FAMILY_NAME[f], "", G.ALGORITHMS[a])
+              for a, f in (("spectral_subtraction", "classical"), ("wiener_dd", "statistical"),
+                           ("mmse_stsa", "statistical"), ("log_mmse", "statistical"), ("omlsa", "statistical"),
+                           ("noisereduce", "library"), ("webrtc_ns", "library"), ("rnnoise", "deep"),
+                           ("nsnet2", "deep"), ("deepfilternet3", "deep"), ("demucs", "deep"))]
+    import textwrap
+    sections = [("What the scores mean", ("Plain name", "Technical name", "Better", "Meaning"), rows_m),
+                ("Other words on the graphs", ("Plain name", "Technical name", "", "Meaning"), rows_t),
+                ("The 11 methods", ("Method", "Type", "", "What it does"), rows_a)]
+    widths = (0.20, 0.17, 0.08, 0.55)
+    lines = sum(1 + sum(max(1, len(textwrap.wrap(r[3], 95))) for r in rs) + 1 for _, _, rs in sections)
+    fig = plt.figure(figsize=(12, 0.235 * lines + 0.6))
+    y, dy = 0.995, 1.0 / (lines + 2)
+    for title, head, rs in sections:
+        fig.text(0.01, y, title, fontsize=11, fontweight="bold", color=INK, va="top")
+        y -= dy * 1.15
+        x = 0.01
+        for h, w in zip(head, widths):
+            fig.text(x, y, h, fontsize=8, color=MUTED, va="top", fontweight="bold")
+            x += w
+        y -= dy
+        for r in rs:
+            wrapped = textwrap.wrap(r[3], 95) or [""]
+            x = 0.01
+            for i, (cell, w) in enumerate(zip(r, widths)):
+                txt = "\n".join(wrapped) if i == 3 else cell
+                color = INK if i == 0 else INK2
+                fig.text(x, y, txt, fontsize=8.2, color=color, va="top", linespacing=1.35,
+                         fontweight="bold" if i == 0 else "normal")
+                x += w
+            y -= dy * len(wrapped)
+            fig.add_artist(plt.Line2D([0.01, 0.99], [y + dy * 0.35] * 2, color=GRID, lw=0.6))
+        y -= dy * 0.6
+    fig.savefig(path, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -521,6 +604,45 @@ def _fmt_ci(m, ci, nd=2):
     if not np.isfinite(m):
         return "n/a"
     return f"{m:+.{nd}f} ± {ci:.{nd}f}" if np.isfinite(ci) else f"{m:+.{nd}f}"
+
+
+def findings(rows, cfgs, noises, snrs, timing) -> list[str]:
+    """Plain-English sentences filled in from the numbers (templates only, no hand-written claims)."""
+    L = ["## Plain-English findings (generated from the numbers below)", ""]
+    g_all = group(rows, ("config",), "d_si_sdr")
+    best_c = max(cfgs, key=lambda c: g_all[(c,)])
+    ss = g_all.get(("ss_simulink",), math.nan)
+    L.append(f"- Overall, **{LABEL[best_c]}** made speech clearest: +{g_all[(best_c,)]:.1f} dB on average, "
+             f"against +{ss:.1f} dB for our Simulink spectral subtraction.")
+    if any(np.isfinite(r["d_pesq"]) for r in rows):
+        g_q = group(rows, ("config",), "d_pesq")
+        bq = max(cfgs, key=lambda c: g_q[(c,)])
+        L.append(f"- The best sound-quality improvement came from **{LABEL[bq]}** (+{g_q[(bq,)]:.2f} PESQ points; "
+                 f"Simulink SS: +{g_q[('ss_simulink',)]:.2f}).")
+    hand = [c for c in cfgs if c in ("ss_simulink", "wiener_dd", "mmse_stsa", "log_mmse", "omlsa")]
+    if hand:
+        bh = max(hand, key=lambda c: g_all[(c,)])
+        L.append(f"- Best of our own hand-written methods: **{LABEL[bh]}** (+{g_all[(bh,)]:.1f} dB).")
+    g_s = group(rows, ("snr_db", "config"), "d_si_sdr")
+    hi = max(snrs)
+    win_hi = max(cfgs, key=lambda c: g_s.get((hi, c), -math.inf))
+    lo = min(snrs)
+    win_lo = max(cfgs, key=lambda c: g_s.get((lo, c), -math.inf))
+    L.append(f"- In very noisy input ({lo:g} dB) the winner is **{LABEL[win_lo]}** (+{g_s[(lo, win_lo)]:.1f} dB); "
+             f"in almost clean input ({hi:g} dB) it is **{LABEL[win_hi]}** (+{g_s[(hi, win_hi)]:.1f} dB).")
+    if timing:
+        cheap = min(cfgs, key=lambda c: timing.get(c, math.inf))
+        dear = max(cfgs, key=lambda c: timing.get(c, -math.inf))
+        L.append(f"- Cheapest: **{LABEL[cheap]}** ({timing[cheap] * 100:.2f} % of one CPU core); most expensive: "
+                 f"**{LABEL[dear]}** ({timing[dear] * 100:.1f} %), {timing[dear] / timing[cheap]:.0f}× more.")
+    worse = [(c, n) for c in cfgs for n in noises
+             if group([r for r in rows if r["config"] == c and r["noise"] == n], ("config",), "d_si_sdr")
+             .get((c,), 0) < 0]
+    if worse:
+        L.append("- Made speech *less* clear on average (worse than doing nothing): "
+                 + ", ".join(f"{LABEL[c]} on {NOISE_LABEL[n]}" for c, n in worse) + ".")
+    L.append("")
+    return L
 
 
 def summary(rows, sweep_rows, path, rho, timing=None):
@@ -539,11 +661,30 @@ def summary(rows, sweep_rows, path, rho, timing=None):
          + ("from the serial timing pass (results/timing.csv)." if timing else
             "logged during the parallel grid (contended; run benchmark.py --timing for clean numbers)."), ""]
 
-    cols = [("d_si_sdr", "ΔSI-SDR (dB)", 2), ("d_snr", "ΔSNR (dB)", 2), ("d_pesq", "ΔPESQ", 3),
-            ("d_estoi", "ΔESTOI", 3), ("lsd_out", "LSD out (dB)", 2), ("noise_reduction_db", "NR (dB)", 1),
-            ("speech_attenuation_db", "speech atten. (dB)", 2), ("d_dnsmos", "ΔDNSMOS OVRL", 3)]
+    # Key terms in plain words (same wording as the figures and the app: app/glossary.py).
+    L += ["## Key terms (plain words)", "", "| Plain name | Technical name | Better | Meaning |", "|---|---|---|---|"]
+    for k in ("d_si_sdr", "d_snr", "d_pesq", "d_estoi", "lsd", "noise_reduction", "speech_attenuation",
+              "d_dnsmos", "rtf", "snr_in"):
+        t = G.METRICS[k]
+        L.append(f"| {t.short} | {t.tech} | {dict(higher='↑ higher', lower='↓ lower').get(t.better, '—')} "
+                 f"| {t.explain} |")
+    for k in ("ci", "wilcoxon"):
+        t = G.TERMS[k]
+        L.append(f"| {t.short} | {t.tech} | — | {t.explain} |")
+    L.append("")
+    L += findings(rows, cfgs, noises, snrs, timing)
+
+    def head(key: str) -> str:
+        t = G.METRICS[key]
+        arrow = {"higher": " ↑", "lower": " ↓"}.get(t.better, "")
+        return f"{t.short}{arrow}<br>({t.tech}{', ' + t.unit if t.unit in ('dB',) else ''})"
+    cols = [("d_si_sdr", head("d_si_sdr"), 2), ("d_snr", head("d_snr"), 2), ("d_pesq", head("d_pesq"), 3),
+            ("d_estoi", head("d_estoi"), 3), ("lsd_out", head("lsd"), 2),
+            ("noise_reduction_db", head("noise_reduction"), 1),
+            ("speech_attenuation_db", head("speech_attenuation"), 2), ("d_dnsmos", head("d_dnsmos"), 3)]
     cols = [c for c in cols if any(np.isfinite(r[c[0]]) for r in rows)]
-    L += ["## Overall", "", "| Configuration | " + " | ".join(c[1] for c in cols) + " | RTF |",
+    L += ["## Overall (average ± uncertainty over all conditions)", "",
+          "| Method | " + " | ".join(c[1] for c in cols) + f" | {head('rtf')} |",
           "|---|" + "---|" * (len(cols) + 1)]
     for c in cfgs:
         sub = [r for r in rows if r["config"] == c]
@@ -552,12 +693,12 @@ def summary(rows, sweep_rows, path, rho, timing=None):
         L.append(f"| {LABEL[c]} | " + " | ".join(cells) + f" | {rtf:.4f} |")
     L.append("")
 
-    for m, mlabel in (("d_si_sdr", "ΔSI-SDR"), ("d_pesq", "ΔPESQ")):
+    for m, mlabel in (("d_si_sdr", "speech clarity gain, ΔSI-SDR"), ("d_pesq", "sound-quality improvement, ΔPESQ")):
         if not any(np.isfinite(r[m]) for r in rows):
             continue
         g = group(rows, ("noise", "config"), m)
-        L += [f"## Best configuration per noise type ({mlabel}, all SNRs pooled)", "",
-              "| Noise | best | 2nd | Wilcoxon p (best vs 2nd, paired) |", "|---|---|---|---|"]
+        L += [f"## Winner per noise type ({mlabel}; all noise levels together)", "",
+              "| Noise | Winner | Runner-up | Is the winner really better? (Wilcoxon p) |", "|---|---|---|---|"]
         for n in noises:
             ranked = sorted(((g[(n, c)], c) for c in cfgs if (n, c) in g and np.isfinite(g[(n, c)])),
                             reverse=True)
@@ -571,14 +712,14 @@ def summary(rows, sweep_rows, path, rho, timing=None):
                 p = wilcoxon([a[k] for k in keys], [b[k] for k in keys]).pvalue if len(keys) >= 6 else math.nan
             except ValueError:
                 p = math.nan
-            ptxt = "n/a (too few pairs)" if not np.isfinite(p) else (f"{p:.2g}" + (" (significant at 0.05)"
-                                                                                    if p < 0.05 else ""))
+            ptxt = ("n/a (too few pairs)" if not np.isfinite(p) else
+                    f"yes (p = {p:.2g})" if p < 0.05 else f"not sure, could be chance (p = {p:.2g})")
             L.append(f"| {NOISE_LABEL[n]} | {LABEL[c1]} ({v1:+.2f}) | {LABEL[c2]} ({v2:+.2f}) | {ptxt} |")
         L.append("")
 
     g = group(rows, ("snr_db", "config"), "d_si_sdr")
-    L += ["## Best configuration per input SNR (ΔSI-SDR, all noises pooled)", "", "| SNR (dB) | best | 2nd |",
-          "|---|---|---|"]
+    L += ["## Winner per starting noise level (speech clarity gain, ΔSI-SDR; all noise types together)", "",
+          "| Starting noise level: input SNR (dB) | Winner | Runner-up |", "|---|---|---|"]
     for s in snrs:
         ranked = sorted(((g[(s, c)], c) for c in cfgs if (s, c) in g), reverse=True)
         L.append(f"| {s:g} | {LABEL[ranked[0][1]]} ({ranked[0][0]:+.2f}) | "
@@ -622,7 +763,8 @@ def main() -> int:
     rows = load(args.bench)
     args.out.mkdir(parents=True, exist_ok=True)
     o = args.out
-    fig_metric_vs_snr(rows, "d_si_sdr", "ΔSI-SDR (dB)", "SI-SDR improvement vs input SNR",
+    fig_glossary(o / "fig0_glossary.png", plt)
+    fig_metric_vs_snr(rows, "d_si_sdr", G.label("d_si_sdr"), "How much clearer does the speech get?",
                       o / "fig1_si_sdr_vs_snr.png", plt)
     if any(np.isfinite(r["pesq_out"]) for r in rows):
         fig_pesq_estoi(rows, o / "fig2_pesq_estoi_vs_snr.png", plt)
@@ -638,10 +780,11 @@ def main() -> int:
             fig_sweeps(sweep_rows, o / "fig7b_sensitivity_pesq.png", plt, "d_pesq", "mean ΔPESQ")
     if not args.no_spectrograms:
         fig_spectrograms(rows, o / "fig8_spectrograms.png", plt)
-    fig_heatmap(rows, "d_si_sdr", "Mean ΔSI-SDR (dB) per configuration and noise type", o / "fig9_heatmap_si_sdr.png", plt)
+    fig_heatmap(rows, "d_si_sdr", "Speech clarity gain (ΔSI-SDR, dB) for every method × noise type",
+                o / "fig9_heatmap_si_sdr.png", plt)
     if any(np.isfinite(r["d_pesq"]) for r in rows):
-        fig_heatmap(rows, "d_pesq", "Mean ΔPESQ per configuration and noise type", o / "fig10_heatmap_pesq.png",
-                    plt, fmt="{:+.2f}")
+        fig_heatmap(rows, "d_pesq", "Sound-quality improvement (ΔPESQ) for every method × noise type",
+                    o / "fig10_heatmap_pesq.png", plt, fmt="{:+.2f}")
     rho = fig_dnsmos_vs_pesq(rows, o / "fig11_dnsmos_vs_pesq.png", plt)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     summary(rows, sweep_rows, args.summary, rho, timing)

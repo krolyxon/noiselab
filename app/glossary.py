@@ -50,12 +50,12 @@ METRICS: dict[str, Term] = {
         "How much the predicted fraction of understood words went up (0.1 = 10 percentage points).",
         "", "0–1"),
     "lsd": Term(
-        "Speech distortion", "LSD (log-spectral distance)", "lower",
+        "Speech distortion", "LSD = log-spectral distance", "lower",
         "How much the shape of the speech spectrum differs from the clean speech. "
         "Noise left over and speech damaged both increase it.",
         "How much the 'colour' of the voice was changed.", "dB"),
     "noise_reduction": Term(
-        "Noise removed in pauses", "noise reduction (NR)", "higher",
+        "Noise removed in pauses", "NR = noise reduction", "higher",
         "How much quieter the gaps between words became. Does not say whether the speech survived.",
         "Turning down the background between sentences.", "dB"),
     "speech_attenuation": Term(
@@ -77,9 +77,9 @@ METRICS: dict[str, Term] = {
         "AI listener score improvement", "ΔDNSMOS OVRL", "higher",
         "How much the AI listener's overall rating went up after cleaning.", "", "points"),
     "rtf": Term(
-        "CPU cost", "RTF (real-time factor)", "lower",
+        "CPU cost", "RTF = real-time factor", "lower",
         "Processing time ÷ audio length on one CPU core. 0.01 = 1 % of one core; above 1 = cannot run live.",
-        "0.02 means 1 minute of audio is cleaned in about 1.2 seconds.", "× real time"),
+        "0.02 means 1 minute of audio is cleaned in about 1.2 seconds.", "fraction of one core"),
     "snr_in": Term(
         "Starting noise level", "input SNR", "",
         "How loud the speech is compared with the noise before cleaning. Lower = noisier: "
@@ -129,6 +129,24 @@ FAMILIES: dict[str, Term] = {
                  "A network trained on many hours of noisy speech learns what to remove."),
 }
 
+# One-line plain description of every algorithm (UI dropdown, figure 0, docs).
+ALGORITHMS: dict[str, str] = {
+    "spectral_subtraction": "Measures the average noise in the first half-second and subtracts it from every "
+                            "frame. Our Simulink method.",
+    "wiener_dd": "Like subtraction, but turns each frequency down by a smooth fraction based on how likely it is "
+                 "to be speech. Less 'twinkling' leftover noise.",
+    "mmse_stsa": "Probability-based: picks the gain that makes the cleaned loudness of each frequency closest "
+                 "to the clean speech, on average.",
+    "log_mmse": "Same idea as MMSE-STSA, but matches loudness on a log (decibel) scale, closer to how we hear.",
+    "omlsa": "Log-MMSE that also keeps re-measuring the noise while you talk, so it follows noise that changes.",
+    "noisereduce": "A noise gate per frequency: anything below a learned noise threshold is muted.",
+    "webrtc_ns": "The noise suppressor built into Chrome / Google Meet calls (classic signal processing).",
+    "rnnoise": "A very small neural network (used in Jitsi, OBS) that turns 22 frequency bands up or down.",
+    "nsnet2": "Microsoft's neural network for noise suppression (from their DNS Challenge).",
+    "deepfilternet3": "A modern neural network that also repairs the harmonics of the voice. Runs live on a laptop.",
+    "demucs": "Meta's large neural network that rebuilds the clean waveform directly. Best quality, most CPU.",
+}
+
 # Plain names of swept / tuned parameters (figure 7, UI tooltips).
 PARAMS: dict[str, str] = {
     "alpha": "α: how much noise to subtract",
@@ -151,8 +169,15 @@ def label(key: str, *, tech: bool = True, unit: bool = True, arrow: bool = True)
     return s
 
 
+def average(text: str) -> str:
+    """'Average speech clarity gain…' (keeps acronyms such as 'AI' intact)."""
+    if len(text) > 1 and text[1].islower():
+        text = text[0].lower() + text[1:]
+    return "Average " + text
+
+
 def as_json() -> dict:
     return {"metrics": {k: asdict(v) for k, v in METRICS.items()},
             "terms": {k: asdict(v) for k, v in TERMS.items()},
             "families": {k: asdict(v) for k, v in FAMILIES.items()},
-            "params": PARAMS}
+            "params": PARAMS, "algorithms": ALGORITHMS}
