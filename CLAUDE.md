@@ -13,7 +13,7 @@ It has two deliverables:
 
 ### Non-negotiable principles
 
-- **The Simulink model is the project.** The web app is an extension and must be described as one in every doc and in the UI "About" panel. Never present the web app as a replacement for the Simulink work.
+- **The Simulink model is the from-scratch spectral-subtraction implementation.** It stays spectral subtraction only, and the Python pipeline must keep parity with it. The public `README.md` presents the project as a multi-algorithm comparative study and describes the Simulink model as one component, not the primary deliverable. The course-facing material (UI "About" panel, `simulink/README.md`, `docs/VIVA.md`, `docs/REPORT_OUTLINE.md`) may keep the course framing (Simulink primary, web app an extension).
 - **Algorithm parity.** The Python DSP must implement the same steps as the Simulink model (same window, frame size, overlap, subtraction rule, phase handling). A `scripts/compare_simulink_python.py` script must demonstrate this on the same input file.
 - **The core algorithm stays hand-written.** Everything in `app/dsp/` (spectral subtraction and the statistical estimators of §14) is written by hand with NumPy/SciPy, so the author can explain every line in a viva. Prebuilt denoisers (`noisereduce`, WebRTC NS, RNNoise, NSNet2, DeepFilterNet, Demucs) are allowed **only** as optional comparison baselines in `app/enhancers/thirdparty/` (§14). They must never be imported by `app/dsp/` or presented as the project's own algorithm.
 - **Honesty about what was tested.** Claude cannot run MATLAB. Any `.m` file or `.slx` guidance must be labelled "untested — run and fix in MATLAB". Never claim the Simulink model works.
@@ -269,11 +269,11 @@ python scripts/compare_simulink_python.py samples/noisy.wav out/cleaned_simulink
 - Demo mode shows ground-truth SNR improvement and SI-SDR.
 - Simulink README, block table and scripts exist and are honestly labelled as to what was tested.
 - `docs/VIVA.md` and `docs/REPORT_OUTLINE.md` exist.
-- The UI and README both state plainly: **the Simulink model is the primary implementation; the web app is an extension.**
+- The UI About panel states the course framing (Simulink model primary, web app an extension); the README describes the Simulink model as the from-scratch spectral-subtraction implementation within the wider study.
 
 ## 14. v2 — Algorithm comparison bench (extension)
 
-Goal: answer **"which noise-suppression algorithm works best under which conditions?"** with graphs, statistics and conclusions for the report, as requested by the project guide. The Simulink model stays spectral subtraction only and remains the primary implementation. Everything in this section is a further extension of the web app.
+Goal: answer **"which noise-suppression algorithm works best under which conditions?"** with graphs, statistics and conclusions for the report, as requested by the project guide. The Simulink model stays spectral subtraction only. Everything in this section is a further extension of the web app.
 
 ### Algorithms (registry in `app/enhancers/`)
 
