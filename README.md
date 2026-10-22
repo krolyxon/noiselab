@@ -236,7 +236,7 @@ app/
 simulink/              model builder, run/export scripts, plain-MATLAB reference, block table
 scripts/               benchmark, figures, dataset/model fetchers, Simulink comparison
 tests/                 pytest suite (DSP, API, parameters, Simulink-chain emulation, JS parity)
-docs/                  algorithm derivations, glossary, figures, viva Q&A, report outline
+docs/                  algorithm derivations, glossary, figures
 ```
 
 ## Documentation
@@ -246,8 +246,6 @@ docs/                  algorithm derivations, glossary, figures, viva Q&A, repor
 | [`docs/ALGORITHM.md`](docs/ALGORITHM.md) | The math for every hand-written method, with numbered equations cited in the code |
 | [`docs/GLOSSARY.md`](docs/GLOSSARY.md) | Every metric and term in plain words |
 | [`simulink/README.md`](simulink/README.md) | Block table, parameters and how to build and run the model |
-| [`docs/VIVA.md`](docs/VIVA.md) | Questions and short answers on the method, its limits and the results |
-| [`docs/REPORT_OUTLINE.md`](docs/REPORT_OUTLINE.md) | Structure of the written project report |
 
 ## API
 
