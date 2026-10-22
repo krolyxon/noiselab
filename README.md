@@ -25,7 +25,7 @@ Everything in `app/dsp/` is hand-written and can be explained line by line. That
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 flask --app app run --debug                          # open http://127.0.0.1:5000
-pytest -q                                            # ~175 tests, ~6 s (ML tests skipped)
+pytest -q                                            # ~180 tests, ~5 s (ML tests skipped)
 ```
 
 Requires Python 3.10+ (developed on 3.14). Dependencies: Flask, NumPy, SciPy, soundfile, pytest, plus matplotlib, which only the comparison script uses. Plotly.js 2.35.2, KaTeX 0.16.11 and the Inter / JetBrains Mono fonts are vendored in `app/static/vendor/` with their licences. The app works offline and on lab networks that block CDNs.
@@ -127,7 +127,7 @@ VIRTUAL_ENV=.venv-ml uv pip install torch==2.14.1 torchaudio==2.11.0 --index-url
 VIRTUAL_ENV=.venv-ml uv pip install -r requirements-ml.txt
 .venv-ml/bin/python scripts/fetch_models.py       # NSNet2 + DNSMOS ONNX (SHA-256 checked), warms DFN3/Demucs weights
 .venv-ml/bin/flask --app app run --debug           # same app, all 11 algorithms available
-.venv-ml/bin/python -m pytest -q                   # ~195 tests incl. the ml-marked ones
+.venv-ml/bin/python -m pytest -q                   # ~200 tests incl. the ml-marked ones
 ```
 
 Missing models are greyed out in the UI, with the reason, and listed in `/api/health`.
