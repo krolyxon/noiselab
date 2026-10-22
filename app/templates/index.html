@@ -36,6 +36,7 @@
       <span class="pill busy" id="st-busy" hidden><span class="spinner"></span><span id="st-busy-text">processing</span></span>
       <span class="top-actions">
         <button class="btn btn-ghost btn-sm" id="btn-method" type="button" title="Method, equations and references">Method</button>
+        <button class="btn btn-ghost btn-sm" id="btn-gloss" type="button" title="What do all the scores and words mean? (plain language)">Glossary</button>
         <button class="btn btn-ghost btn-sm" id="btn-help" type="button" title="Keyboard shortcuts (?)">?</button>
         <button class="btn btn-ghost btn-sm" id="btn-theme" type="button" title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
       </span>
@@ -253,6 +254,7 @@
           <div class="sweep-actions">
             <label class="check small" title="DNSMOS P.835: a model-predicted MOS that needs no clean reference (adds ≈ 0.1 s per 9 s of audio per algorithm)">
               <input type="checkbox" id="compare-dnsmos"> DNSMOS</label>
+            <button class="btn btn-ghost btn-sm" id="btn-gloss-compare" type="button" title="What do these scores mean?">ⓘ terms</button>
             <button class="btn btn-sm btn-accent" id="btn-compare" type="button">Compare all</button>
           </div>
         </div>
@@ -286,6 +288,14 @@
   </footer>
 
   <div class="toasts" id="toasts" aria-live="assertive"></div>
+
+  <dialog class="dialog dialog-wide" id="dlg-gloss" aria-labelledby="dlg-gloss-title">
+    <div class="dialog-head"><h2 id="dlg-gloss-title">Glossary: the scores and words in plain language</h2>
+      <button class="btn btn-ghost btn-sm" data-close type="button" aria-label="Close">✕</button></div>
+    <p class="muted small method">Plain name first, standard technical name second. ↑ = higher is better, ↓ = lower is better.
+      The same wording is used in the report figures (<code>results/figures/fig0_glossary.png</code>).</p>
+    <div class="method" id="gloss-body"><p class="muted">Loading…</p></div>
+  </dialog>
 
   <dialog class="dialog" id="dlg-help" aria-labelledby="dlg-help-title">
     <div class="dialog-head"><h2 id="dlg-help-title">Keyboard shortcuts</h2>

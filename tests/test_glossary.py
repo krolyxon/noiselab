@@ -27,3 +27,9 @@ def test_api_glossary(client):
     j = r.get_json()
     assert {"metrics", "terms", "families", "params"} <= set(j)
     assert j["metrics"]["pesq"]["tech"] == "PESQ"
+
+
+def test_every_algorithm_has_a_plain_description(client):
+    algos = client.get("/api/algorithms").get_json()["algorithms"]
+    for a in algos:
+        assert a["plain"], a["id"]

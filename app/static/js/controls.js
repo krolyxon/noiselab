@@ -30,19 +30,19 @@ const META = {
 // Per-algorithm parameters (§14): label, symbol, readout. Keys not listed fall back to the
 // schema's help text and a plain readout.
 const ALGO_META = {
-  dd_alpha: { label: "Decision-directed weight", sym: "α_dd", show: (v) => fmt(v, 3) },
-  xi_min_db: { label: "A-priori SNR floor", sym: "ξ_min", show: (v) => fmt(v, 0, "dB") },
-  gain_floor_db: { label: "Gain floor", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
-  g_min_db: { label: "Gain in speech absence", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
-  tracking_window_s: { label: "Noise-tracking window", sym: "D", show: (v) => fmt(v, 2, "s") },
+  dd_alpha: { label: "Smoothing over time", sym: "α_dd", show: (v) => fmt(v, 3) },
+  xi_min_db: { label: "Leftover-noise floor", sym: "ξ_min", show: (v) => fmt(v, 0, "dB") },
+  gain_floor_db: { label: "Max. turn-down", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
+  g_min_db: { label: "Turn-down in pauses", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
+  tracking_window_s: { label: "Noise re-measure window", sym: "D", show: (v) => fmt(v, 2, "s") },
   stationary: { label: "Noise model", labels: (v) => (v ? "Stationary" : "Non-stationary") },
   prop_decrease: { label: "Proportion removed", sym: "p", show: (v) => fmt(v * 100, 0, "%") },
-  n_std_thresh: { label: "Threshold", sym: "σ", show: (v) => `${fmt(v, 2)} σ` },
+  n_std_thresh: { label: "Gate threshold", sym: "σ", show: (v) => `${fmt(v, 2)} σ` },
   time_mask_smooth_ms: { label: "Mask smoothing (time)", show: (v) => fmt(v, 0, "ms") },
   freq_mask_smooth_hz: { label: "Mask smoothing (freq.)", show: (v) => fmt(v, 0, "Hz") },
   level: { label: "Suppression level", labels: (v) => ["", "mild", "moderate", "high", "very high"][v] },
-  phase_compensation: { label: "HPF phase compensation", labels: (v) => (v ? "On" : "Off") },
-  vad_threshold: { label: "VAD gate threshold", sym: "P(speech)", show: (v) => (v <= 0 ? "off" : fmt(v, 2)) },
+  phase_compensation: { label: "Undo filter phase shift", labels: (v) => (v ? "On" : "Off") },
+  vad_threshold: { label: "Mute when not speech", sym: "P(speech)", show: (v) => (v <= 0 ? "off" : fmt(v, 2)) },
   gate_db: { label: "Gate attenuation", show: (v) => fmt(v, 0, "dB") },
   min_gain_db: { label: "Minimum gain", sym: "G_min", show: (v) => fmt(v, 0, "dB") },
   post_filter: { label: "Post-filter", labels: (v) => (v ? "On" : "Off") },
@@ -306,7 +306,8 @@ export class Controls {
     const algo = this.algorithm();
     if (this.algoSelect) {
       this.algoSelect.value = v.algorithm;
-      this.algoDesc.textContent = algo ? algo.description : "";
+      this.algoDesc.replaceChildren(...(algo ? [el("strong", { text: algo.plain || algo.description }),
+        algo.plain ? el("span", { class: "algo-tech", text: ` ${algo.description}` }) : ""] : []));
       this.algoDesc.title = algo ? algo.reference : "";
     }
     for (const [k, inp] of Object.entries(this.algoInputs)) {

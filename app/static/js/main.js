@@ -7,6 +7,7 @@ import { ABPlayer } from "./player.js";
 import { colors, drawCompare, drawInspector, drawSpectra, drawSweep, familyColor, Plots } from "./plots.js";
 import { LivePreview, liveSupport } from "./live.js";
 import { drawLive, micSupport, Recorder } from "./recorder.js";
+import { plainAlgorithm, renderGlossary, setGlossary, tip } from "./glossary.js";
 import { $, $$, api, debounce, el, fmt, postJSON, toast } from "./util.js";
 import { decodeAudio, downmix, encodeWav, envelope } from "./wav.js";
 
@@ -88,8 +89,8 @@ function showResult(res, { newJob }) {
   $("#btn-export").disabled = false;
   sweepUI.onResult(res, { newJob });
   $("#gain-kind").textContent = res.algorithm?.explicit_gain === false
-    ? "effective mask |STFT(ŝ)| / |Y| (black-box model) · 0 = removed · 1 = kept"
-    : "0 = removed · 1 = kept · Eq. 8";
+    ? "gain the model actually applied (measured: output ÷ input) · 0 = removed · 1 = kept"
+    : "keep/remove map · 0 = removed · 1 = kept · Eq. 8";
   dnsmosUI.onResult(res);
   compareUI.onResult(res, { newJob });
   const urls = newJob ? res.audio : { cleaned: res.audio.cleaned, noise: res.audio.noise };
@@ -670,19 +671,24 @@ const dnsmosUI = {
 
 // ---------------------------------------------------------------------------- algorithm comparison (§14)
 const nz = (v) => (v === null || v === undefined ? NaN : v);
+// label = plain words (chart buttons, table headers); tech = standard name; g = glossary key (tooltip).
 const COMPARE_METRICS = [
-  { id: "si_sdr", label: "ΔSI-SDR (dB)", demo: true, get: (r) => nz(r.ground_truth?.si_sdr_improvement_db),
-    fmt: (v) => fmt(v, 2) },
-  { id: "pesq", label: "PESQ", demo: true, get: (r) => nz(r.ground_truth?.pesq_out), fmt: (v) => fmt(v, 2) },
-  { id: "estoi", label: "ESTOI", demo: true, get: (r) => nz(r.ground_truth?.estoi_out), fmt: (v) => fmt(v, 3) },
-  { id: "lsd", label: "LSD (dB)", demo: true, lowerIsBetter: true, get: (r) => nz(r.ground_truth?.lsd_out_db),
-    fmt: (v) => fmt(v, 2) },
-  { id: "nr", label: "Noise reduction (dB)", get: (r) => nz(r.noise_reduction_db), fmt: (v) => fmt(v, 1) },
-  { id: "sa", label: "Speech atten. (dB)", lowerIsBetter: true, get: (r) => nz(r.speech_attenuation_db),
-    fmt: (v) => fmt(v, 2) },
-  { id: "ovrl", label: "DNSMOS OVRL", get: (r) => nz(r.dnsmos?.output?.ovrl), fmt: (v) => fmt(v, 2) },
-  { id: "rtf", label: "Real-time factor", lowerIsBetter: true, get: (r) => nz(r.real_time_factor),
-    fmt: (v) => fmt(v, 4) },
+  { id: "si_sdr", label: "Clarity gain (dB)", tech: "ΔSI-SDR", g: "d_si_sdr", demo: true,
+    get: (r) => nz(r.ground_truth?.si_sdr_improvement_db), fmt: (v) => fmt(v, 2) },
+  { id: "pesq", label: "Sound quality", tech: "PESQ", g: "pesq", demo: true,
+    get: (r) => nz(r.ground_truth?.pesq_out), fmt: (v) => fmt(v, 2) },
+  { id: "estoi", label: "Intelligibility", tech: "ESTOI", g: "estoi", demo: true,
+    get: (r) => nz(r.ground_truth?.estoi_out), fmt: (v) => fmt(v, 3) },
+  { id: "lsd", label: "Distortion (dB)", tech: "LSD", g: "lsd", demo: true, lowerIsBetter: true,
+    get: (r) => nz(r.ground_truth?.lsd_out_db), fmt: (v) => fmt(v, 2) },
+  { id: "nr", label: "Noise removed (dB)", tech: "NR", g: "noise_reduction",
+    get: (r) => nz(r.noise_reduction_db), fmt: (v) => fmt(v, 1) },
+  { id: "sa", label: "Speech lost (dB)", tech: "speech attenuation", g: "speech_attenuation", lowerIsBetter: true,
+    get: (r) => nz(r.speech_attenuation_db), fmt: (v) => fmt(v, 2) },
+  { id: "ovrl", label: "AI listener score", tech: "DNSMOS OVRL", g: "dnsmos_ovrl",
+    get: (r) => nz(r.dnsmos?.output?.ovrl), fmt: (v) => fmt(v, 2) },
+  { id: "rtf", label: "CPU cost", tech: "RTF", g: "rtf", lowerIsBetter: true,
+    get: (r) => nz(r.real_time_factor), fmt: (v) => fmt(v, 4) },
 ];
 
 const compareUI = {
@@ -758,7 +764,7 @@ const compareUI = {
     // metric buttons for the chart
     const seg = $("#compare-metric");
     seg.replaceChildren(...ms.filter((m) => m.id !== "rtf").map((m) => el("button", { type: "button", role: "radio",
-      "aria-checked": String(m.id === this.metric), text: m.label.replace(/ \(.*\)$/, ""),
+      "aria-checked": String(m.id === this.metric), text: m.label.replace(/ \(.*\)$/, ""), title: tip(m.g),
       onclick: () => { this.metric = m.id; this.render(); } })));
     const done = this.rows.filter((r) => !r.pending && !r.error);
     const metric = COMPARE_METRICS.find((m) => m.id === this.metric);
@@ -768,7 +774,7 @@ const compareUI = {
     const table = $("#compare-table");
     if (!this.rows.length) { table.replaceChildren(); return; }
     const head = el("tr", {}, el("th", { text: "Algorithm" }),
-      ...ms.map((m) => el("th", { text: m.label, title: m.lowerIsBetter ? "lower is better" : "higher is better",
+      ...ms.map((m) => el("th", { text: `${m.label} ${m.lowerIsBetter ? "↓" : "↑"}`, title: tip(m.g),
         "aria-sort": this.sortKey === m.id ? (this.sortDesc ? "descending" : "ascending") : null,
         onclick: () => { this.sortDesc = this.sortKey === m.id ? !this.sortDesc : !m.lowerIsBetter;
           this.sortKey = m.id; this.render(); } })),
@@ -824,11 +830,16 @@ async function boot() {
   wireDemo();
   $("#btn-method").addEventListener("click", () => openDialog("#dlg-method"));
   $("#btn-help").addEventListener("click", () => openDialog("#dlg-help"));
+  $("#btn-gloss").addEventListener("click", () => openDialog("#dlg-gloss"));
+  $("#btn-gloss-compare").addEventListener("click", () => openDialog("#dlg-gloss"));
   $("#btn-theme").addEventListener("click", toggleTheme);
   $("#btn-export").addEventListener("click", exportZip);
   try {
-    const [health, presets, algos] = await Promise.all([api("/api/health"), api("/api/presets"),
-      api("/api/algorithms")]);
+    const [health, presets, algos, gloss] = await Promise.all([api("/api/health"), api("/api/presets"),
+      api("/api/algorithms"), api("/api/glossary")]);
+    setGlossary(gloss);
+    renderGlossary($("#gloss-body"), Object.fromEntries(algos.algorithms.map((a) => [a.id, a.name])));
+    for (const a of algos.algorithms) a.plain = plainAlgorithm(a.id);
     state.health = health;
     state.algorithms = algos.algorithms;
     $("#formats-hint").textContent = `${health.formats.join(" · ")} · ≤\u00a0${health.limits.max_upload_mb}\u00a0MB · ≤\u00a0${health.limits.max_duration_s}\u00a0s`;

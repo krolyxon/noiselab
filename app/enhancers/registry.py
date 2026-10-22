@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Any
 
+from ..glossary import ALGORITHMS
 from ..schema import spec_json
 from .base import FAMILIES, AlgoSpec, Enhancer
 from .classical import CLASSICAL
@@ -52,6 +53,7 @@ def algorithms_json() -> list[dict[str, Any]]:
         ok, reason = availability(a)
         out.append({
             "id": s.id, "name": s.name, "family": s.family, "family_name": FAMILIES[s.family],
+            "plain": ALGORITHMS.get(s.id, ""),
             "description": s.description, "reference": s.reference,
             "native_sr": s.native_sr, "latency_ms": s.latency_ms,
             "uses_noise_estimate": s.uses_noise_estimate, "hand_written": s.hand_written,

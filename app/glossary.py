@@ -176,8 +176,16 @@ def average(text: str) -> str:
     return "Average " + text
 
 
+GLOSSARY_ORDER = ("snr_in", "d_si_sdr", "d_snr", "seg_snr", "pesq", "d_pesq", "estoi", "d_estoi", "lsd",
+                  "noise_reduction", "speech_attenuation", "dnsmos_ovrl", "dnsmos_sig", "dnsmos_bak", "d_dnsmos",
+                  "rtf")
+
+
 def as_json() -> dict:
+    """Dicts keyed by id (lookup) plus `order` lists, because JSON object order is not guaranteed."""
     return {"metrics": {k: asdict(v) for k, v in METRICS.items()},
             "terms": {k: asdict(v) for k, v in TERMS.items()},
             "families": {k: asdict(v) for k, v in FAMILIES.items()},
-            "params": PARAMS, "algorithms": ALGORITHMS}
+            "params": PARAMS, "algorithms": ALGORITHMS,
+            "order": {"metrics": list(GLOSSARY_ORDER), "terms": list(TERMS), "families": list(FAMILIES),
+                      "algorithms": list(ALGORITHMS)}}

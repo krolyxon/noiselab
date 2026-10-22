@@ -340,7 +340,7 @@ export function drawInspector(div, fr) {
   const c = colors();
   const lbl = fr.noise_label;
   const floorLbl = fr.floor_label || "no floor";
-  const gainLbl = fr.explicit_gain === false ? "|S̃| = G_eff·|Y| (effective)" : "|S̃| = G·|Y|";
+  const gainLbl = fr.explicit_gain === false ? "|S̃| cleaned (measured gain × |Y|)" : "|S̃| = G·|Y| cleaned";
   document.getElementById("insp-l-sub").textContent = lbl;
   document.getElementById("insp-l-floor").textContent = floorLbl;
   document.getElementById("insp-l-floor").parentElement.hidden = !fr.floor_db;
