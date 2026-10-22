@@ -13,7 +13,7 @@ Single-channel speech noise suppression with **spectral subtraction** (Boll, 197
 | `app/dsp/` | Hand-written DSP in NumPy/SciPy: STFT, noise estimation, subtraction, metrics, test signals | Unit-tested (`pytest`) |
 | `app/` | Flask API + browser UI (vanilla JS, Plotly, KaTeX, all vendored) | API tests + headless-browser checks |
 | `scripts/compare_simulink_python.py` | Aligns and compares Simulink output with Python | Tested on emulated Simulink output |
-| `docs/` | [`ALGORITHM.md`](docs/ALGORITHM.md) (math, numbered equations cited in code), [`VIVA.md`](docs/VIVA.md), [`REPORT_OUTLINE.md`](docs/REPORT_OUTLINE.md) | — |
+| `docs/` | [`ALGORITHM.md`](docs/ALGORITHM.md) (math, numbered equations cited in code), [`GLOSSARY.md`](docs/GLOSSARY.md) (every term in plain words), [`VIVA.md`](docs/VIVA.md), [`REPORT_OUTLINE.md`](docs/REPORT_OUTLINE.md) | — |
 
 Everything in `app/dsp/` is hand-written and can be explained line by line. That covers spectral subtraction and, since v2, four statistical estimators. Prebuilt denoisers (noisereduce, WebRTC NS, RNNoise, NSNet2, DeepFilterNet3, Demucs) appear **only** as optional comparison baselines in `app/enhancers/thirdparty/`. See [Comparison bench](#comparison-bench-extension) below.
 
@@ -148,7 +148,7 @@ The benchmark is resumable, deterministic (seeded) and fair: same mixtures for a
 
 Means over all conditions (± 95 % CI ≈ 0.2–0.3 dB for ΔSI-SDR, ≈ 0.03 for ΔPESQ). Full tables, per-noise winners and Wilcoxon tests are in `results/summary.md`.
 
-| Algorithm | ΔSI-SDR (dB) | ΔPESQ | ΔESTOI | LSD out (dB) | Noise reduction (dB) | RTF (1 core) |
+| Algorithm | Speech clarity gain ↑<br>(ΔSI-SDR, dB) | Sound-quality improvement ↑<br>(ΔPESQ) | Intelligibility improvement ↑<br>(ΔESTOI) | Speech distortion ↓<br>(LSD, dB) | Noise removed in pauses ↑<br>(NR, dB) | CPU cost ↓<br>(RTF, 1 core) |
 |---|---|---|---|---|---|---|
 | SS (Simulink settings) | +5.84 | +0.40 | +0.018 | 7.23 | 24.2 | 0.0006 |
 | Wiener-DD | +6.42 | +0.36 | +0.019 | 7.28 | 27.5 | 0.0020 |
@@ -161,6 +161,8 @@ Means over all conditions (± 95 % CI ≈ 0.2–0.3 dB for ΔSI-SDR, ≈ 0.03 fo
 | NSNet2 | +5.47 | +0.50 | +0.066 | 6.13 | 40.6 | 0.0083 |
 | DeepFilterNet3 | +8.45 | +0.75 | +0.098 | 6.41 | 47.2 | 0.0185 |
 | Demucs (dns64) | **+10.05** | +0.64 | **+0.111** | **5.84** | 48.0 | 0.1433 |
+
+Every term in plain words: [`docs/GLOSSARY.md`](docs/GLOSSARY.md), the **Glossary** button in the app, and `results/figures/fig0_glossary.png` for the report. Each figure starts with a "How to read" line.
 
 What the numbers show (details and the remaining checks for the report: `docs/REPORT_OUTLINE.md` §7A):
 - **ΔSI-SDR:** Demucs is best on 10 of 11 noise types, and DeepFilterNet3 on office noise. All but the car case are significant (paired Wilcoxon, p < 0.05; car p = 0.24).

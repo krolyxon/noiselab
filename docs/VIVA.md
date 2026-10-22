@@ -182,3 +182,22 @@ Each mixture is processed by both algorithms, so the results are *paired*. The W
 **50. If you had to ship one algorithm in a phone app, which and why?**
 Answer from your own results (fig. 3, fig. 5, summary.md). The usual reasoning: the best quality per unit of compute at real-time latency, which is typically a small neural model such as DeepFilterNet3 or RNNoise. A statistical method (log-MMSE / OM-LSA) is the choice when there is no budget for a neural network or the noise is stationary. Spectral subtraction is the right *teaching* algorithm, and the easiest to implement in Simulink or on a DSP chip.
 
+## F. Explaining the graphs in simple words
+
+All terms are in [`GLOSSARY.md`](GLOSSARY.md) and in figure 0 (`results/figures/fig0_glossary.png`).
+
+**51. Explain "speech clarity gain (ΔSI-SDR)" without jargon.**
+We compare the cleaned waveform with the original clean speech and measure how much "error" is left, like counting spelling mistakes after proof-reading. The gain is how much smaller that error became, in dB. Every 3 dB halves the error, and +10 dB means 10× less error. It is scale-invariant, so simply making the output louder or quieter does not change the score.
+
+**52. Why can a method remove the most noise and still sound worse?**
+"Noise removed" only looks at the pauses between words. RNNoise removes 62.8 dB there, the most of any method, but it also turns the speech down by 12.6 dB and changes its colour, so its sound-quality improvement (PESQ +0.15) is the lowest. Good noise suppression is a *balance*: figure 4 puts noise removed on one axis and speech damage on the other.
+
+**53. What does a p-value tell the evaluator?**
+We ran every method on the *same* clips, so we can ask: if the two methods were really equal, how likely is a difference this big just by chance? That likelihood is the p-value. p < 0.05 (less than a 1-in-20 chance) means the winner is really better. For example, Demucs vs DeepFilterNet3 on car noise has p = 0.24, so we do not claim a winner there.
+
+**54. Why show both PESQ/ESTOI and the "AI listener" (DNSMOS)?**
+PESQ and ESTOI need the clean speech, so they only work in the benchmark. DNSMOS needs nothing but the cleaned audio, so it works on our own recordings. Figure 11 shows the two agree well (rank correlation 0.79), which is why we trust DNSMOS for the live recordings in the app.
+
+**55. How do I read figure 3 ("which method wins") in one sentence?**
+Rows are noise types and columns are how noisy the input was. Each box names the method that cleaned it best: neural networks (yellow) win almost everywhere when the input is noisy, and our probability-based methods (orange) win when the input is already fairly clean.
+

@@ -299,6 +299,7 @@ Rules:
 - Metrics: §5, plus PESQ (WB) and STOI/ESTOI when a clean reference exists, plus DNSMOS P.835 (SIG/BAK/OVRL) for any audio. DNSMOS is labelled a *model-predicted* MOS, never ground truth.
 - Benchmark: `scripts/benchmark.py` runs algorithms × noise types × SNRs × utterances at 16 kHz with fixed seeds, writing `results/bench.csv`. `scripts/report_figures.py` writes the figures and `results/summary.md`. Conclusions are written from those numbers, never in advance.
 - Alignment: every wrapper returns ŝ time-aligned with y (resampling is zero-phase; known model delays are removed: RNNoise 960 samples (2 frames) at 48 kHz, WebRTC NS 96 samples at 16 kHz). WebRTC's fixed high-pass filter phase is undone by default (`phase_compensation`), because SI-SDR would otherwise penalise an inaudible phase shift. `tests/test_thirdparty.py` checks the residual lag is ≤ 2 samples.
+- Plain language: every user-facing metric/term label comes from `app/glossary.py` (plain name first, technical name in brackets). Figures carry a "How to read" line. After editing the glossary, run `scripts/export_glossary.py` (a test checks `docs/GLOSSARY.md` is in sync).
 - Known environment quirks: DeepFilterNet 0.5.6 imports the removed `torchaudio.backend`, so the wrapper installs a stub module before importing `df`. `hydra-core` 0.11 (pulled in by `denoiser`) ships a top-level `tests` package, which is why `tests/__init__.py` exists.
 
 ### Commands

@@ -74,6 +74,7 @@ State first that this is a further extension: the Simulink model remains spectra
   - A 1 s noise lead-in. Fixed seeds. `scripts/fetch_datasets.py`, `scripts/benchmark.py`.
 - **Fairness:** same mixtures, time alignment (measured model delays), single-thread RTF, defaults plus a separate parameter sweep (VIVA Q41).
 - **Metrics:** ΔSI-SDR, ΔSNR, PESQ, ESTOI, LSD, noise reduction / speech attenuation, DNSMOS (model-predicted, reference-free).
+- **Make it readable:** put fig. 0 (`fig0_glossary.png`, every term in plain words + the 11 methods in one line each) right before the results. Under each figure, copy its "How to read" line and add one sentence on what it shows. Use the plain names in the text ("speech clarity gain") and the technical name once in brackets ("ΔSI-SDR"). [`docs/GLOSSARY.md`](GLOSSARY.md) has the wording; VIVA Q51–Q55 have simple explanations.
 - **Results:** figures from `scripts/report_figures.py`, with numbers from `results/summary.md`:
   - Fig. 1: ΔSI-SDR vs input SNR, by noise class.
   - Fig. 2: PESQ / ESTOI vs SNR, with the unprocessed baseline.
