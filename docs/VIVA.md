@@ -99,7 +99,7 @@ Our clicks result (+0.7 to +4.6 dB) shows the non-stationary case.
 Update |N̂| during speech pauses (a VAD-gated recursive average), or use minimum statistics (Martin, 2001), which tracks the minimum of the smoothed power per bin. NoiseLab has a simplified percentile version (`minstats`). A running estimate inside Simulink is listed as a stretch goal.
 
 **28. What would modern systems do differently?**
-Statistical estimators (Ephraim–Malah MMSE-STSA, log-MMSE) with decision-directed a-priori SNR, or neural networks (e.g. RNNoise, DeepFilterNet) that learn a mask. We deliberately did not use those: the goal was an explainable, from-scratch implementation.
+Statistical estimators (Ephraim–Malah MMSE-STSA, log-MMSE) with a decision-directed a-priori SNR, or neural networks (e.g. RNNoise, DeepFilterNet) that learn a mask. The core project (Simulink + the basic Python chain) stays spectral subtraction, because it is explainable block by block. The comparison extension (section E) then puts SS next to both families: the statistical estimators hand-written, the neural ones as third-party baselines.
 
 **29. Why is β·|N̂| sometimes *above* |Y| (G > 1)?**
 The floor in Eq. (7) is absolute. In a bin where |Y| is already below β^{1/p}|N̂|, the rule raises it to the floor. That fills spectral holes and is part of what masks musical noise. When smoothing is enabled, the gain is capped at 1 first, otherwise the smoothing would spread those raised gains to neighbouring bins (`docs/ALGORITHM.md` §4).
@@ -115,3 +115,70 @@ Yes. The live preview runs the basic algorithm in an AudioWorklet, one 512-point
 
 **33. Why is the plain percentile ("minimum statistics") estimate biased, and how did you fix it?**
 In noise-only bins |Y|² is roughly exponentially distributed, so its q-quantile is −ln(1−q)·σ², only about 0.105·σ² for q = 10 %, an 8.7 dB underestimate. Dividing by −ln(1−q), and scaling by π/4 to get a mean magnitude, removes the bias (Eq. 6). On the demo set this raised the SI-SDR gain from +1.5 dB to +4.0 dB.
+
+## E. Comparison extension (statistical and neural methods)
+
+**34. What did you add beyond spectral subtraction, and why?**
+A comparison bench, because the project guide asked which algorithm works best under which conditions. It has four hand-written statistical estimators (Wiener-DD, MMSE-STSA, log-MMSE, OM-LSA/IMCRA), one library method (noisereduce), one production DSP method (WebRTC NS), and four neural networks (RNNoise, NSNet2, DeepFilterNet3, Demucs). All run on the same STFT/plotting/metrics pipeline and the same benchmark. The Simulink model is unchanged and still the primary deliverable.
+
+**35. What is the a-priori SNR, and what does "decision-directed" mean?**
+γ = |Y|²/λ_d (a-posteriori SNR) is what we measure. ξ = E|S|²/λ_d (a-priori SNR) is what the gain really needs, but the clean speech is unknown. The decision-directed rule (Eq. 24) estimates ξ as a weighted mix of the *previous frame's clean estimate* (G²γ of frame m−1) and the current max(γ−1, 0). With α_dd = 0.98 the first term dominates.
+
+**36. Why do MMSE methods produce less musical noise than spectral subtraction?**
+In SS, a random noise peak that exceeds α|N̂| passes straight through as an isolated tone. In the decision-directed methods, ξ in noise-only regions is dominated by the previous, already small estimate, so a single peak raises ξ only slightly and its gain stays low. The gain varies smoothly in time (Cappé 1994 analysed this). ξ_min sets the residual-noise floor that masks what is left.
+
+**37. Difference between MMSE-STSA and log-MMSE?**
+MMSE-STSA minimises the error of the amplitude, E(|S|−|Ŝ|)² (Eq. 26). Log-MMSE minimises the error of the log-amplitude (Eq. 27), which matches loudness perception better and suppresses low-SNR bins slightly more, giving less residual noise for similar distortion. Both tend to the Wiener gain at high SNR (unit test).
+
+**38. What does OM-LSA add, and what is IMCRA?**
+OM-LSA weights the log-MMSE gain by the speech-presence probability p: G = G_LSA^p · G_min^(1−p) (Eq. 28). Where speech is absent, the gain falls smoothly to G_min. IMCRA is its noise tracker: it smooths |Y|², tracks the minimum over about 1 s, uses that to estimate where speech is absent, and updates the noise estimate quickly there and not at all where speech is present (Eq. 30–33). So OM-LSA does not need a silent lead-in, and it follows noise whose level changes. The unit test steps the noise by +10 dB, and the estimate re-tracks to within 2 dB.
+
+**39. How does a neural denoiser differ from these?**
+It learns the mapping noisy → clean from thousands of hours of data, instead of assuming Gaussian speech and noise. RNNoise and NSNet2 predict a gain mask (like ours, but learned). DeepFilterNet3 also predicts complex filter taps that restore harmonics. Demucs outputs the waveform directly, with no STFT and no noisy phase. They need no noise estimate from the user.
+
+**40. Why did you not write the neural networks yourself?**
+Training needs large datasets and GPU time, which is outside the scope of an MBD course project. The pretrained models are used only as comparison baselines, in their own folder (`app/enhancers/thirdparty/`), and are clearly labelled as third-party. Everything the project claims as its own is hand-written and documented with equations.
+
+**41. How did you make the comparison fair?**
+- Every method gets the same mixtures: same utterances, noise segments, SNRs and seeds.
+- Metrics are computed by the same code.
+- Outputs are time-aligned: model delays were measured and removed (RNNoise 960 samples at 48 kHz, WebRTC 96 samples at 16 kHz), and resampling is zero-phase.
+- Every method can share one attenuation limit (Eq. 34).
+- Runtime is measured on one CPU thread for all of them.
+- Default parameters are used, and sensitivity is shown separately in the sweep.
+
+**42. Why did one sample of delay matter so much?**
+SI-SDR and SNR compare waveforms sample by sample. A 1-sample shift at 16 kHz is a phase error of 2π·f/16000, already 45° at 2 kHz. During development RNNoise lost up to 9 dB of SI-SDR from a 1-sample error. Perceptual metrics such as PESQ align internally, which is why they barely changed. Lesson: always check alignment before trusting waveform metrics.
+
+**43. Why does WebRTC have a "phase compensation" switch?**
+WebRTC always applies a high-pass filter before its noise suppressor. Its phase shift at 100–200 Hz is inaudible, but it makes SI-SDR drop by several dB even with suppression off. We identify the filter once (white noise in, cross-spectrum out), undo its *phase only*, and keep its magnitude, which really is part of WebRTC. The switch lets you show the effect in the viva.
+
+**44. Which metrics did you use, and what does each measure?**
+- SNR and SI-SDR: waveform error, which needs the clean reference.
+- Segmental SNR: frame-wise SNR.
+- PESQ (P.862.2): perceived quality, MOS-like 1–4.6.
+- STOI/ESTOI: intelligibility, 0–1.
+- LSD: spectral distortion of the speech.
+- Noise reduction and speech attenuation: reference-free, from the VAD.
+- DNSMOS: a neural prediction of listener ratings, also reference-free.
+
+A good method has high noise reduction *and* low speech attenuation or LSD, and these pull against each other.
+
+**45. What is DNSMOS and why should it not be over-trusted?**
+A CNN trained on crowd-sourced P.835 ratings predicts SIG (speech), BAK (background) and OVRL (overall) on a 1–5 scale. It needs no clean reference, so it works on real recordings. But it is a model: it is biased toward the kind of audio it was trained on (it rates our synthetic voiced signal poorly even when clean), and it can be fooled. We report how well it agrees with PESQ (Spearman ρ in `results/summary.md`) and use it for ranking only.
+
+**46. Why does the benchmark use real speech instead of your synthetic signal?**
+The neural models learned the statistics of real speech. On a synthetic harmonic signal they can misbehave, and DNSMOS scores it as poor speech. LibriSpeech test-clean (40 speakers, CC BY 4.0) gives real speech. The DEMAND noises (car, street, cafeteria, office, living room) give real noise. The synthetic noises are kept because they isolate effects such as hum, clicks and stationarity.
+
+**47. What is the trade-off between latency, compute and quality?**
+Latency: frame length plus look-ahead (WebRTC 10 ms frames, RNNoise 20 ms, NSNet2 20 ms window, DeepFilterNet3 about 40 ms). Compute: the real-time factor on one CPU core, from about 0.001 for SS to about 0.3 for Demucs, a 300× spread (fig. 5). A video-call app needs RTF ≪ 1 and latency < 40 ms, which is why products use RNNoise/DeepFilterNet-sized models rather than the biggest network.
+
+**48. Where do neural models fail?**
+On noise unlike their training data: steady tones and hum, clicks, music. When the input is already clean they can damage it (speech attenuation, "underwater" artefacts). At very low SNR they may also remove speech or hallucinate. Check `results/summary.md` ("cases where a configuration made SI-SDR worse") and fig. 3 for the cells where a classical method won.
+
+**49. What is a paired Wilcoxon test and why use it?**
+Each mixture is processed by both algorithms, so the results are *paired*. The Wilcoxon signed-rank test asks whether the median of the per-mixture differences is zero, without assuming normality. Metric differences are often skewed, which is why we use it rather than a t-test. A p < 0.05 means the winner's advantage is unlikely to be chance for that noise type.
+
+**50. If you had to ship one algorithm in a phone app, which and why?**
+Answer from your own results (fig. 3, fig. 5, summary.md). The usual reasoning: the best quality per unit of compute at real-time latency, which is typically a small neural model such as DeepFilterNet3 or RNNoise. A statistical method (log-MMSE / OM-LSA) is the choice when there is no budget for a neural network or the noise is stationary. Spectral subtraction is the right *teaching* algorithm, and the easiest to implement in Simulink or on a DSP chip.
+

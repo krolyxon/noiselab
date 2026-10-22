@@ -15,7 +15,7 @@ Single-channel speech noise suppression with **spectral subtraction** (Boll, 197
 | `scripts/compare_simulink_python.py` | Aligns and compares Simulink output with Python | Tested on emulated Simulink output |
 | `docs/` | [`ALGORITHM.md`](docs/ALGORITHM.md) (math, numbered equations cited in code), [`VIVA.md`](docs/VIVA.md), [`REPORT_OUTLINE.md`](docs/REPORT_OUTLINE.md) | — |
 
-No black-box denoisers are used (`noisereduce`, RNNoise, DeepFilterNet, Demucs, …). Every step is in `app/dsp/` and can be explained line by line.
+Everything in `app/dsp/` is hand-written and can be explained line by line. That covers spectral subtraction and, since v2, four statistical estimators. Prebuilt denoisers (noisereduce, WebRTC NS, RNNoise, NSNet2, DeepFilterNet3, Demucs) appear **only** as optional comparison baselines in `app/enhancers/thirdparty/`. See [Comparison bench](#comparison-bench-extension) below.
 
 ---
 
@@ -25,7 +25,7 @@ No black-box denoisers are used (`noisereduce`, RNNoise, DeepFilterNet, Demucs, 
 python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 flask --app app run --debug                          # open http://127.0.0.1:5000
-pytest -q                                            # ~140 tests, ~5 s
+pytest -q                                            # ~175 tests, ~6 s (ML tests skipped)
 ```
 
 Requires Python 3.10+ (developed on 3.14). Dependencies: Flask, NumPy, SciPy, soundfile, pytest, plus matplotlib, which only the comparison script uses. Plotly.js 2.35.2, KaTeX 0.16.11 and the Inter / JetBrains Mono fonts are vendored in `app/static/vendor/` with their licences. The app works offline and on lab networks that block CDNs.
@@ -96,6 +96,86 @@ How to read this:
 
 ---
 
+## Comparison bench (extension)
+
+The project guide asked which noise-suppression algorithms work best under which conditions. NoiseLab v2 runs 11 algorithms through the same pipeline and the same metrics. **The Simulink model still implements spectral subtraction only, and remains the primary deliverable.**
+
+| Family | Algorithms | Code |
+|---|---|---|
+| Classical | Spectral subtraction (the Simulink algorithm) | `app/dsp/spectral_subtraction.py` |
+| Statistical, hand-written | Wiener (decision-directed), MMSE-STSA, log-MMSE, OM-LSA + IMCRA noise tracking | `app/dsp/statistical.py`, Eq. 22–33 |
+| DSP libraries | noisereduce (spectral gating), WebRTC NS (the browser / Google Meet suppressor) | `app/enhancers/thirdparty/` |
+| Deep learning | RNNoise (Jitsi, OBS), NSNet2 (Microsoft DNS Challenge), DeepFilterNet3, Demucs | `app/enhancers/thirdparty/` |
+
+- **In the app:**
+  - The *Algorithm* menu switches methods, and every method exposes its own parameters.
+  - *Max attenuation* (Eq. 34) works the same way for all methods.
+  - The *Algorithm comparison* panel runs every available method on the current clip, with a sortable table, a bar chart and per-method playback.
+  - Demo mode adds PESQ, ESTOI and log-spectral distance.
+  - *Score with DNSMOS* gives a reference-free predicted MOS for any recording.
+- **For the report:**
+  - `scripts/benchmark.py` runs every method on real speech (LibriSpeech) × 11 noises (6 synthetic + 5 recorded DEMAND environments) × 6 SNRs.
+  - `scripts/report_figures.py` turns the results into 11 figures and `results/summary.md` (means ± 95 % CI, per-condition winners, Wilcoxon tests).
+
+### Install (optional, separate venv)
+
+The neural models need PyTorch, and DeepFilterNet needs numpy < 2, so they get their own Python 3.12 environment ([uv](https://docs.astral.sh/uv/) makes this one command each). The basic app above does not need any of it.
+
+```bash
+uv venv -p 3.12 .venv-ml
+VIRTUAL_ENV=.venv-ml uv pip install torch==2.14.1 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+VIRTUAL_ENV=.venv-ml uv pip install -r requirements-ml.txt
+.venv-ml/bin/python scripts/fetch_models.py       # NSNet2 + DNSMOS ONNX (SHA-256 checked), warms DFN3/Demucs weights
+.venv-ml/bin/flask --app app run --debug           # same app, all 11 algorithms available
+.venv-ml/bin/python -m pytest -q                   # ~195 tests incl. the ml-marked ones
+```
+
+Missing models are greyed out in the UI, with the reason, and listed in `/api/health`.
+
+### Benchmark
+
+```bash
+.venv-ml/bin/python scripts/fetch_datasets.py      # ~870 MB download, ~50 MB kept in data/ (gitignored)
+.venv-ml/bin/python scripts/benchmark.py --quick   # smoke test, ~1 min
+.venv-ml/bin/python scripts/benchmark.py           # 14 520 runs → results/bench.csv (~1.5 h on 12 cores)
+.venv-ml/bin/python scripts/benchmark.py --sweep   # parameter sensitivity → results/sweep.csv
+.venv-ml/bin/python scripts/report_figures.py      # results/figures/*.png + results/summary.md
+```
+
+The benchmark is resumable, deterministic (seeded) and fair: same mixtures for all methods, measured model delays removed. See VIVA Q41. `benchmark.py --timing` measures real-time factors serially on an idle machine. RTFs logged during the parallel grid are inflated by contention, unevenly across models (Demucs 1.08 vs 0.14 serial), so figure 5 uses the serial pass.
+
+### Results (20 LibriSpeech utterances × 11 noises × 6 SNRs, 14 520 runs; generated 2026-10-22)
+
+Means over all conditions (± 95 % CI ≈ 0.2–0.3 dB for ΔSI-SDR, ≈ 0.03 for ΔPESQ). Full tables, per-noise winners and Wilcoxon tests are in `results/summary.md`.
+
+| Algorithm | ΔSI-SDR (dB) | ΔPESQ | ΔESTOI | LSD out (dB) | Noise reduction (dB) | RTF (1 core) |
+|---|---|---|---|---|---|---|
+| SS (Simulink settings) | +5.84 | +0.40 | +0.018 | 7.23 | 24.2 | 0.0006 |
+| Wiener-DD | +6.42 | +0.36 | +0.019 | 7.28 | 27.5 | 0.0020 |
+| MMSE-STSA | +5.78 | +0.47 | +0.020 | 6.60 | 14.5 | 0.0043 |
+| Log-MMSE | +6.25 | +0.49 | +0.021 | 6.52 | 17.9 | 0.0040 |
+| OM-LSA + IMCRA | +4.65 | +0.40 | +0.030 | 6.81 | 12.4 | 0.0111 |
+| noisereduce | +2.72 | +0.45 | +0.026 | 6.75 | 31.0 | 0.0032 |
+| WebRTC NS | +4.64 | +0.38 | +0.007 | 7.31 | 15.1 | 0.0016 |
+| RNNoise | +4.31 | +0.15 | +0.066 | 6.73 | 62.8 | 0.0232 |
+| NSNet2 | +5.47 | +0.50 | +0.066 | 6.13 | 40.6 | 0.0083 |
+| DeepFilterNet3 | +8.45 | +0.75 | +0.098 | 6.41 | 47.2 | 0.0185 |
+| Demucs (dns64) | **+10.05** | +0.64 | **+0.111** | **5.84** | 48.0 | 0.1433 |
+
+What the numbers show (details and the remaining checks for the report: `docs/REPORT_OUTLINE.md` §7A):
+- **ΔSI-SDR:** Demucs is best on 10 of 11 noise types, and DeepFilterNet3 on office noise. All but the car case are significant (paired Wilcoxon, p < 0.05; car p = 0.24).
+- **ΔPESQ:** DeepFilterNet3 is best overall (+0.75). Hand-written statistical methods win the PESQ cells for 50 Hz hum at 10–20 dB and for office noise at 5–20 dB.
+- **High SNR:** at 20 dB input SNR the best ΔSI-SDR is log-MMSE (+3.80), ahead of every neural model, and the neural models' ΔSI-SDR falls fastest as the SNR rises (fig. 1).
+- **Simulink SS vs the statistical estimators:** the statistical estimators match SS on ΔSI-SDR (Wiener-DD +6.4, log-MMSE +6.3 vs +5.8). Log-MMSE reaches higher ΔPESQ (+0.49 vs +0.40) and lower spectral distortion (LSD 6.5 vs 7.2 dB) at about 7× SS's cost, still 0.4 % of one core.
+- **Cost:** DeepFilterNet3 gives the largest ΔPESQ at 1.9 % of one CPU core. Demucs costs 8× more for a slightly *lower* ΔPESQ (fig. 5).
+- **Worse than doing nothing:** noisereduce made SI-SDR worse on average for fan (−0.2 dB) and clicks (−2.1 dB).
+- **RNNoise:** it removes the most noise in pauses (62.8 dB) but also attenuates speech frames the most (12.6 dB), and has the lowest ΔPESQ (fig. 4).
+- **Parameter sweeps (5 dB):** SS peaks at α ≈ 1.5–2, which supports the Simulink default α = 2. Log-MMSE peaks at α_dd = 0.98. A DeepFilterNet3/Demucs attenuation limit below 18 dB costs > 1 dB SI-SDR.
+- **DNSMOS vs PESQ:** DNSMOS OVRL agrees with PESQ with Spearman ρ = 0.79 over all outputs.
+- **Speech material:** LibriSpeech read speech. Results may differ for conversational speech, other languages and microphones.
+
+---
+
 ## API
 
 | Method | Path | Purpose |
@@ -111,6 +191,9 @@ How to read this:
 | GET | `/api/noise-profile/<id>/spectrum?sr=&n_fft=` | Profile \|N̂\| for the live preview |
 | GET | `/api/audio/<job_id>/<original\|cleaned\|noise\|clean>.wav` | `noise` = removed component y − ŝ; `clean` = demo only |
 | GET/POST | `/api/export/<job_id>` | ZIP (POST adds plot PNGs) |
+| GET | `/api/algorithms` | Every algorithm: family, description, reference, parameter schema, availability (+ reason) |
+| POST | `/api/compare/<job_id>/<algorithm>` | `{"params", "dnsmos"}` → metrics row + `cleaned_<algorithm>.wav` URL (Compare panel) |
+| POST | `/api/quality/<job_id>` | DNSMOS P.835 of the input and the latest output (slow, so on demand) |
 
 Parameters are validated against the table in `app/params.py`. Out-of-range values are **rejected with a 400**, not silently clamped. Uploads are identified by content, not file name or MIME type. Jobs live in memory plus a per-job temp folder with random IDs, and are deleted after 30 minutes idle.
 
@@ -125,12 +208,16 @@ app/
   params.py              parameter schema, validation, presets
   routes.py              page + /api/*
   dsp/                   pure NumPy/SciPy, no Flask: stft, noise_estimation, spectral_subtraction,
-                         metrics, synth, viz_data
+                         statistical (MMSE family, OM-LSA/IMCRA), metrics, synth, viz_data
+  enhancers/             algorithm registry (§14): base interface, classical adapters, runner,
+                         quality (PESQ/STOI/DNSMOS), model_files; thirdparty/ = optional baselines
   services/              audio_io (safe load/save), jobs (LRU+TTL cache), processing (run + metrics + viz)
   templates/index.html   the UI
   static/{css,js,vendor} vanilla ES modules, no build step
 simulink/                model builder, run/export, helpers, reference loop, README (block table)
-scripts/compare_simulink_python.py
+scripts/                compare_simulink_python.py, fetch_models.py, fetch_datasets.py, benchmark.py,
+                         report_figures.py
+requirements-ml.txt      optional comparison-bench environment (Python 3.12)
 tests/                   pytest: DSP, params, API, Simulink-chain emulation, JS helpers (via Node, optional)
 docs/                    ALGORITHM.md, VIVA.md, REPORT_OUTLINE.md
 samples/                 no audio committed; see samples/README.md

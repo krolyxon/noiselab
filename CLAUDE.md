@@ -249,6 +249,7 @@ python scripts/compare_simulink_python.py samples/noisy.wav out/cleaned_simulink
 7. **Polish:** presets, export ZIP, About/Method panel with KaTeX, keyboard shortcuts, empty/error states, responsive layout.
 8. **Docs:** `README.md`, `docs/VIVA.md` (at least 20 likely questions with 2–3 line answers: why Hann, why overlap, what is musical noise, why noisy phase, what does α/β do, limitations of the method, etc.), `docs/REPORT_OUTLINE.md`.
 9. **Stretch:** AudioWorklet live preview, parameter sweep heatmap, min-statistics tuning.
+10. **v2 comparison bench (§14):** 10a deps/policy, 10b registry + hand-written statistical estimators, 10c third-party wrappers, 10d perceptual metrics, 10e datasets + benchmark + figures, 10f UI (selector, Compare panel, DNSMOS), 10g docs + results.
 
 ## 12. Working agreements for Claude
 

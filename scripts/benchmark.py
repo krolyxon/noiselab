@@ -244,6 +244,42 @@ def run_unit(utt: dict, noise: str, snr: float, todo: list[tuple[str, dict, dict
     return rows
 
 
+# --- timing ------------------------------------------------------------------------------------
+
+def timing(configs: list[str], utts: list[dict], path: Path, repeats: int = 3) -> int:
+    """Real-time factor measured serially in this process, one thread, nothing else running.
+
+    The main grid runs many workers in parallel, which inflates and *distorts* per-run times
+    (memory-bound models suffer more than compute-bound ones). Figure 5 therefore uses this
+    pass: median over utterances × repeats of (processing time / audio duration).
+    """
+    _init_worker()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for c in configs:
+        p = validate(CONFIGS[c])
+        prepare(p)
+        rtfs = []
+        for utt in utts:
+            t = make_trial(utt, "white", 5.0)
+            dur = len(t["noisy"]) / SR
+            enhance_signal(t["noisy"], SR, p)                 # warm caches
+            for _ in range(repeats):
+                t0 = time.perf_counter()
+                enhance_signal(t["noisy"], SR, p)
+                rtfs.append((time.perf_counter() - t0) / dur)
+        rows.append({"config": c, "algorithm": p.algorithm, "family": registry.spec(p.algorithm).family,
+                     "rtf_median": float(np.median(rtfs)), "rtf_min": float(np.min(rtfs)),
+                     "rtf_max": float(np.max(rtfs)), "n": len(rtfs)})
+        print(f"  {c:16s} RTF {rows[-1]['rtf_median']:.4f} (min {rows[-1]['rtf_min']:.4f}, n={len(rtfs)})", flush=True)
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows({k: _fmt(v) for k, v in r.items()} for r in rows)
+    print(f"→ {path}")
+    return 0
+
+
 # --- driver ------------------------------------------------------------------------------------
 
 def _done_keys(path: Path, key_cols: list[str]) -> set[tuple]:
@@ -289,6 +325,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--quick", action="store_true", help="tiny grid: 2 utterances × 3 noises × 2 SNRs")
     ap.add_argument("--sweep", action="store_true", help="parameter sensitivity instead of the main grid")
+    ap.add_argument("--timing", action="store_true",
+                    help="serial single-thread timing pass → results/timing.csv (run on an otherwise idle machine)")
     ap.add_argument("--configs", nargs="*", help=f"subset of {list(CONFIGS)}")
     ap.add_argument("--noises", nargs="*", help="subset of noise types")
     ap.add_argument("--snrs", nargs="*", type=float, help=f"input SNRs (default {list(SNRS)})")
@@ -318,6 +356,9 @@ def main() -> int:
         noises = available_noises(args.noises)
         snrs = [float(s) for s in (args.snrs or SNRS)]
     utts = load_utterances(n_utts)
+
+    if args.timing:
+        return timing(configs, utts[: (2 if args.quick else 5)], args.out or RESULTS / "timing.csv")
 
     if args.sweep:
         path = args.out or RESULTS / ("sweep_quick.csv" if args.quick else "sweep.csv")

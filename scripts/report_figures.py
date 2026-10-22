@@ -348,14 +348,25 @@ def fig_tradeoff(rows, path, plt):
     plt.close(fig)
 
 
-def fig_cost(rows, path, plt):
-    """Quality bought per unit of compute: ΔPESQ (or ΔSI-SDR) vs single-core real-time factor."""
+def load_timing(path: Path) -> dict[str, float]:
+    if not path.is_file():
+        return {}
+    with open(path) as f:
+        return {r["config"]: float(r["rtf_median"]) for r in csv.DictReader(f)}
+
+
+def fig_cost(rows, path, plt, timing: dict[str, float] | None = None):
+    """Quality bought per unit of compute: ΔPESQ (or ΔSI-SDR) vs single-core real-time factor.
+
+    Uses the serial timing pass (results/timing.csv) when available; the RTFs logged during the
+    parallel grid are inflated by contention and are only a fallback.
+    """
     cfgs = configs_in(rows)
     fam = family_of(rows)
     metric, mlabel = ("d_pesq", "mean ΔPESQ") if any(np.isfinite(r["d_pesq"]) for r in rows) \
         else ("d_si_sdr", "mean ΔSI-SDR (dB)")
     g_q = group(rows, ("config",), metric)
-    g_r = {c: float(np.median([r["rtf"] for r in rows if r["config"] == c])) for c in cfgs}
+    g_r = {c: (timing or {}).get(c, float(np.median([r["rtf"] for r in rows if r["config"] == c]))) for c in cfgs}
     pts = [(c, g_r[c], g_q[(c,)]) for c in cfgs]
     fig, ax = plt.subplots(figsize=(7.2, 4.6))
     # Pareto front: no other method is both cheaper and better.
@@ -368,7 +379,8 @@ def fig_cost(rows, path, plt):
     _scatter_labelled(ax, pts, fam)
     ax.annotate("real time on one core", (1.0, ax.get_ylim()[0]), xytext=(-4, 4), textcoords="offset points",
                 fontsize=7, color=MUTED, ha="right")
-    ax.set_xlabel("real-time factor, single CPU core (processing time / audio duration, log scale)")
+    src = "serial timing pass" if timing else "parallel grid, contended (run benchmark.py --timing)"
+    ax.set_xlabel(f"real-time factor, single CPU core, {src} (log scale)")
     ax.set_ylabel(mlabel)
     ax.set_title("Quality vs computational cost", loc="left")
     fig.tight_layout(rect=(0, 0.05, 1, 1))
@@ -437,12 +449,14 @@ def fig_sweeps(rows, path, plt, metric="d_si_sdr", ylabel="mean ΔSI-SDR (dB)"):
         param = sub[0]["param"]
         g = group(sub, ("noise", "value"), metric)
         vals = sorted({r["value"] for r in sub})
+        categorical = param in ("atten_limit_db", "level")   # evenly spaced, labelled values
+        xs = list(range(len(vals))) if categorical else vals
         for k, n in enumerate(noises):
             ys = [g.get((n, v), math.nan) for v in vals]
-            ax.plot(vals, ys, marker=STYLES[k % 4][1], ls=STYLES[k % 4][0], color=colors[k % 4],
+            ax.plot(xs, ys, marker=STYLES[k % 4][1], ls=STYLES[k % 4][0], color=colors[k % 4],
                     label=NOISE_LABEL[n], markeredgecolor=SURFACE, markeredgewidth=1)
-        if param == "atten_limit_db":
-            ax.set_xticks(vals, ["off" if v >= 100 else f"{v:g}" for v in vals])
+        if categorical:
+            ax.set_xticks(xs, ["off" if v >= 100 else f"{v:g}" for v in vals])
         ax.set_title(f"{LABEL[c]}: {param}")
         ax.set_xlabel(param)
     for ax in axes.flat[len(cfgs):]:
@@ -509,7 +523,7 @@ def _fmt_ci(m, ci, nd=2):
     return f"{m:+.{nd}f} ± {ci:.{nd}f}" if np.isfinite(ci) else f"{m:+.{nd}f}"
 
 
-def summary(rows, sweep_rows, path, rho):
+def summary(rows, sweep_rows, path, rho, timing=None):
     from scipy.stats import wilcoxon
     cfgs = configs_in(rows)
     n_utt = len({r["utt"] for r in rows})
@@ -521,7 +535,9 @@ def summary(rows, sweep_rows, path, rho):
          f"{n_utt} utterances; speech source: {', '.join(src)}).",
          f"- SNRs (dB): {', '.join(f'{s:g}' for s in snrs)}. Noises: {', '.join(NOISE_LABEL[n] for n in noises)}.",
          "- Values are mean ± 95 % confidence half-width (1.96·s/√n) over all runs of a configuration.",
-         "- Δ = output − unprocessed input. RTF = single-core real-time factor (median).", ""]
+         "- Δ = output − unprocessed input. RTF = single-core real-time factor (median), "
+         + ("from the serial timing pass (results/timing.csv)." if timing else
+            "logged during the parallel grid (contended; run benchmark.py --timing for clean numbers)."), ""]
 
     cols = [("d_si_sdr", "ΔSI-SDR (dB)", 2), ("d_snr", "ΔSNR (dB)", 2), ("d_pesq", "ΔPESQ", 3),
             ("d_estoi", "ΔESTOI", 3), ("lsd_out", "LSD out (dB)", 2), ("noise_reduction_db", "NR (dB)", 1),
@@ -532,7 +548,8 @@ def summary(rows, sweep_rows, path, rho):
     for c in cfgs:
         sub = [r for r in rows if r["config"] == c]
         cells = [_fmt_ci(*mean_ci([r[m] for r in sub])[:2], nd) for m, _, nd in cols]
-        L.append(f"| {LABEL[c]} | " + " | ".join(cells) + f" | {np.median([r['rtf'] for r in sub]):.3f} |")
+        rtf = (timing or {}).get(c, float(np.median([r["rtf"] for r in sub])))
+        L.append(f"| {LABEL[c]} | " + " | ".join(cells) + f" | {rtf:.4f} |")
     L.append("")
 
     for m, mlabel in (("d_si_sdr", "ΔSI-SDR"), ("d_pesq", "ΔPESQ")):
@@ -611,7 +628,8 @@ def main() -> int:
         fig_pesq_estoi(rows, o / "fig2_pesq_estoi_vs_snr.png", plt)
     fig_winner_grid(rows, o / "fig3_best_per_condition.png", plt)
     fig_tradeoff(rows, o / "fig4_tradeoff.png", plt)
-    fig_cost(rows, o / "fig5_quality_vs_cost.png", plt)
+    timing = load_timing(args.bench.parent / "timing.csv")
+    fig_cost(rows, o / "fig5_quality_vs_cost.png", plt, timing)
     fig_stationarity(rows, o / "fig6_stationary_vs_nonstationary.png", plt)
     sweep_rows = load(args.sweep) if args.sweep.is_file() else []
     if sweep_rows:
@@ -626,7 +644,7 @@ def main() -> int:
                     plt, fmt="{:+.2f}")
     rho = fig_dnsmos_vs_pesq(rows, o / "fig11_dnsmos_vs_pesq.png", plt)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
-    summary(rows, sweep_rows, args.summary, rho)
+    summary(rows, sweep_rows, args.summary, rho, timing)
     print(f"figures → {o}\nsummary → {args.summary}")
     return 0
 

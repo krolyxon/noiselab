@@ -287,3 +287,21 @@ Third-party metrics (`app/enhancers/quality.py`, optional):
 - **PESQ**, ITU-T P.862.2 wide-band (`pesq`): both signals resampled to 16 kHz. MOS-LQO scale, about 1.0–4.64.
 - **STOI / ESTOI** (`pystoi`): short-time objective intelligibility, 0–1. ESTOI is stricter for modulated noise.
 - **DNSMOS P.835** (Microsoft, ONNX): a CNN trained on listener ratings predicts SIG (speech distortion), BAK (background intrusiveness) and OVRL (overall), each 1–5. It is **non-intrusive**: it needs no clean reference, so it scores uploaded and recorded audio too. It is a *prediction* of a MOS. Use it to rank systems, and never quote it as a listening-test result. The synthetic voiced signal of §9 gets SIG ≈ 2.2 even when clean, because it is not real speech. This is one reason the benchmark uses real speech. The reference script slides a 9.01 s window by 1 s. The app uses non-overlapping windows (≈ 9× faster). The benchmark's short utterances fit in one window, so the two agree there.
+
+## 14. Third-party baselines (not hand-written, comparison only)
+
+These live in `app/enhancers/thirdparty/`, are optional (`requirements-ml.txt`), and are **not** part of the project's own algorithm. Each wrapper resamples to the model's native rate with zero-phase polyphase filtering, removes the model's measured delay so ŝ is sample-aligned with y (checked by `tests/test_thirdparty.py`), and returns a signal of the same length. For the plots, their gain mask is the effective one, |STFT(ŝ)|/|Y|.
+
+| Model | How it works | Native rate · framing | Delay removed | Trained on | Licence |
+|---|---|---|---|---|---|
+| **noisereduce** 3.0 (Sainburg) | Spectral gating. Threshold = mean + n·σ of the noise clip's dB spectrum (stationary), or a running smoothed spectrogram (non-stationary). The binary mask is smoothed in time and frequency. | any · STFT 1024 | none | — (DSP) | MIT |
+| **WebRTC NS** (Google, via `webrtc-noise-gain` 1.3) | Statistical DSP: noise tracking + Wiener-type gain with speech/noise likelihood features. A fixed ~80 Hz high-pass filter is always on; its phase is undone by default (`phase_compensation`, VIVA Q43). | 16 kHz · 10 ms | 96 samples | — (DSP) | BSD |
+| **RNNoise** (Valin 2018, via `pyrnnoise` 0.4.5) | A GRU network (~60 k weights) predicts gains for 22 Bark-like bands, plus a pitch comb filter. Also outputs a VAD probability, which the optional gate uses. | 48 kHz · 10 ms hop, 20 ms window | 960 samples (20 ms) | speech + noise corpora (Xiph) | BSD |
+| **NSNet2** (Braun & Tashev 2020, ONNX) | Fully connected + GRU network maps log-power spectra to a per-bin gain (161 bins), applied with the noisy phase, like Eq. (12). | 16 kHz · 20 ms √Hann, 10 ms hop | none (same framing as the reference script) | DNS Challenge data | CC BY 4.0 (model), MIT (code) |
+| **DeepFilterNet3** (Schröter et al. 2023, `deepfilternet` 0.5.6) | Stage 1: gains on 32 ERB bands. Stage 2: complex "deep filter" taps over 5 frames for bins below 5 kHz, which can restore harmonics a real gain cannot. | 48 kHz · 20 ms window, 10 ms hop, 2-frame look-ahead (≈ 40 ms) | handled by the library | DNS Challenge + more | MIT / Apache-2.0 |
+| **Demucs** (Défossez et al. 2020, `denoiser` 0.1.5) | Waveform U-Net (conv encoder/decoder) + LSTM, outputs the clean waveform directly: no STFT, no noisy phase. dns48 / dns64 / master64. | 16 kHz · causal | none | DNS Challenge (+ Valentini for master64) | CC BY-NC 4.0 (weights) |
+
+Notes:
+- DeepFilterNet 0.5.6 imports `torchaudio.backend.common`, which torchaudio ≥ 2.9 removed. Only a type annotation is involved, so the wrapper registers an empty stand-in module before importing `df` (`_install_torchaudio_shim`).
+- The Demucs pretrained weights are **non-commercial** (CC BY-NC 4.0). That is fine for a course project, but worth stating in the report.
+- Delays were measured as the lag that maximises SI-SDR on real speech (LibriSpeech). On the synthetic harmonic signal the correlation peak is broad, so the tests allow ±0.1 ms there.

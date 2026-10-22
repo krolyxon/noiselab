@@ -59,6 +59,40 @@ Use `docs/ALGORITHM.md` and keep its equation numbers.
 - ✍️ Effect of N: 256 / 512 / 1024 / 2048 on hum vs white noise.
 - Real recording: no ground truth, so report noise reduction (dB) and describe the listening impression. Do **not** report SNR or SI-SDR for it.
 
+### 7A. Comparative evaluation of noise-suppression algorithms (5–6 pages), *asked for by the guide*
+State first that this is a further extension: the Simulink model remains spectral subtraction and is the primary deliverable.
+- **Algorithms** (table): family, idea in one line, native rate, latency, who uses it:
+  - SS (Simulink settings)
+  - Wiener-DD, MMSE-STSA, log-MMSE, OM-LSA/IMCRA (hand-written, Eq. 22–33)
+  - noisereduce, WebRTC NS
+  - RNNoise, NSNet2, DeepFilterNet3, Demucs (pretrained, third-party)
+  - Cite each paper (`docs/ALGORITHM.md` §12, VIVA Q34–Q50).
+- **Test material:**
+  - Speech: 20 LibriSpeech test-clean utterances (10 F / 10 M).
+  - Noise: 6 synthetic types + 5 DEMAND environments.
+  - SNR: −5 … 20 dB.
+  - A 1 s noise lead-in. Fixed seeds. `scripts/fetch_datasets.py`, `scripts/benchmark.py`.
+- **Fairness:** same mixtures, time alignment (measured model delays), single-thread RTF, defaults plus a separate parameter sweep (VIVA Q41).
+- **Metrics:** ΔSI-SDR, ΔSNR, PESQ, ESTOI, LSD, noise reduction / speech attenuation, DNSMOS (model-predicted, reference-free).
+- **Results:** figures from `scripts/report_figures.py`, with numbers from `results/summary.md`:
+  - Fig. 1: ΔSI-SDR vs input SNR, by noise class.
+  - Fig. 2: PESQ / ESTOI vs SNR, with the unprocessed baseline.
+  - Fig. 3: best algorithm per (noise, SNR). *This is the "which algorithm when" answer.*
+  - Fig. 9 / 10: algorithm × noise heatmaps.
+  - Fig. 4: noise reduction vs speech distortion trade-off.
+  - Fig. 5: quality vs real-time factor (Pareto front).
+  - Fig. 6: stationary vs non-stationary noise.
+  - Fig. 7: parameter sensitivity (SS α, log-MMSE α_dd, OM-LSA G_min, WebRTC level, DFN/Demucs attenuation limit).
+  - Fig. 8: spectrograms of one utterance through every method.
+  - Fig. 11: DNSMOS vs PESQ agreement.
+- ✍️ **Conclusions:** write only what the numbers show, with 95 % CIs and Wilcoxon p-values from `summary.md`. Suggested structure:
+  - (a) Which family wins overall, and by how much.
+  - (b) Where classical methods are competitive or better (stationary noise, hum, high SNR?).
+  - (c) Where neural models clearly win (non-stationary / real noise?).
+  - (d) Cost: how much quality each step up in compute buys.
+  - (e) The noise-removal vs speech-distortion trade-off.
+- ✍️ A real recording of your own through every method (Compare panel in the app): DNSMOS + listening notes only, no SI-SDR.
+
 ### 8. Discussion (2 pages)
 - Where spectral subtraction works (stationary broadband noise, hum with long frames) and where it fails (clicks, babble, low SNR).
 - Musical noise vs residual noise: the α/β trade-off.
@@ -67,10 +101,19 @@ Use `docs/ALGORITHM.md` and keep its equation numbers.
 
 ### 9. Conclusion and future work (1 page)
 - Summary of achievements against the objectives.
-- Future work: noise tracking inside the model (VAD-gated recursive average, minimum statistics), Wiener / MMSE-STSA gain, real-time implementation on hardware (e.g. an embedded target via Simulink code generation), perceptual metrics (PESQ/STOI) if licensing allows.
+- Future work:
+  - Port the best hand-written statistical estimator (log-MMSE or OM-LSA) into the Simulink model, as a MATLAB Function block on the same FFT chain.
+  - Noise tracking inside the model (IMCRA is already written in Python).
+  - Real-time implementation on hardware, e.g. an embedded target via Simulink code generation.
+  - A small listening test, to check the DNSMOS/PESQ rankings.
 
 ### References
-Boll 1979; Berouti et al. 1979; Le Roux et al. 2019; Martin 2001; MathWorks DSP System Toolbox documentation (blocks used); any datasets or recordings (with licences).
+Boll 1979; Berouti et al. 1979; Le Roux et al. 2019; Martin 2001; MathWorks DSP System Toolbox documentation (blocks used).
+Comparison extension:
+- Ephraim & Malah 1984, 1985; Scalart & Vieira Filho 1996; Cohen & Berdugo 2001; Cohen 2003; Loizou 2013 (textbook).
+- Valin 2018 (RNNoise); Braun & Tashev 2020 (NSNet2); Schröter et al. 2023 (DeepFilterNet); Défossez et al. 2020 (Demucs); Sainburg et al. 2020 (noisereduce); WebRTC.
+- Metrics: ITU-T P.862.2 (PESQ), Taal et al. 2011 / Jensen & Taal 2016 (STOI / ESTOI), Reddy et al. 2022 (DNSMOS P.835).
+- Data: Panayotov et al. 2015 (LibriSpeech, CC BY 4.0), Thiemann et al. 2013 (DEMAND, CC BY 4.0).
 
 ### Appendices
 - A. Full block parameter listing (export from the model).
