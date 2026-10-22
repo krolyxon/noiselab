@@ -18,7 +18,7 @@ from flask import Blueprint, current_app, jsonify, render_template, request, sen
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
-from . import __version__
+from . import __version__, glossary
 from .dsp import synth
 from .dsp.noise_estimation import estimate_profile
 from .dsp.stft import StftConfig
@@ -196,6 +196,12 @@ def quality(job_id: str):
     job = _get_job(job_id)
     with job.lock:
         return jsonify(processing.perceptual_quality(job))
+
+
+@bp.get("/api/glossary")
+def glossary_route():
+    """Plain-language explanations of every metric and term (app/glossary.py)."""
+    return jsonify(glossary.as_json())
 
 
 @bp.get("/api/algorithms")
