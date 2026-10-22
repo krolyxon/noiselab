@@ -149,8 +149,6 @@ From Multimedia File → Buffer (N = 512, 50 %) → × Hann → FFT → |·|, �
 
 The noise spectrum |N̂| is estimated in the model's `InitFcn` from the first 0.5 s of the input. [`simulink/README.md`](simulink/README.md) has the full block table, the parameter values and build instructions. You can build the model by hand from the table or programmatically with `build_spectral_subtraction_model.m`.
 
-> **Testing status.** The MATLAB scripts were written without access to MATLAB and have not been run there yet, so expect to fix block library paths for your release. The *design* is verified: [`tests/test_simulink_chain.py`](tests/test_simulink_chain.py) emulates the block chain frame by frame in Python and matches the Python pipeline to 3 × 10⁻¹⁶.
-
 To compare a Simulink run with the Python implementation (the web app's **Match Simulink basic** preset uses the same settings):
 
 ```matlab
