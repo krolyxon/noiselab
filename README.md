@@ -291,5 +291,3 @@ Out-of-range parameters are rejected with a 400 error rather than clamped. Uploa
 ## License
 
 NoiseLab is released under the [GNU General Public License v3.0](LICENSE).
-
-Vendored front-end assets in `app/static/vendor/` (Plotly.js, KaTeX, Inter, JetBrains Mono) keep their own licences, which are included alongside them. Downloaded models and datasets (LibriSpeech, DEMAND, NSNet2, DNSMOS, DeepFilterNet, Demucs) are subject to their authors' terms.
